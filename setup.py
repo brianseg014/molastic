@@ -1,11 +1,16 @@
 
 from setuptools import setup, find_packages
 
+from pathlib import Path
+this_directory = Path(__file__).parent
+long_description = (this_directory / "README.md").read_text()
 
 setup(
     name='molastic',
     version='0.0.1',
     description='Library to easymock out elasticsearch for your tests',
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     author='Brian Estrada',
     author_email='brianseg014@gmail.com',
     packages=find_packages(),
