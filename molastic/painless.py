@@ -1,3 +1,5 @@
+# pylint: disable=invalid-name
+
 from __future__ import annotations
 
 import re
@@ -8,8 +10,8 @@ import functools
 import ply.lex
 import ply.yacc
 import inspect
-
 import logging
+
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -17,16 +19,19 @@ logger.setLevel(logging.DEBUG)
 
 
 def execute(code: str, variables: dict):
-    python = compile(transpile(parse(code)), filename="<ast>", mode="exec")
     from . import java_api
-    shared_api = {m[0]:m[1] for m in inspect.getmembers(java_api)}
-    _globals = { **variables, **shared_api }
-    _locals = {}
+
+    python = compile(transpile(parse(code)), filename="<ast>", mode="exec")
+
+    shared_api = {m[0]: m[1] for m in inspect.getmembers(java_api)}
+    _globals: dict = {**variables, **shared_api}
+    _locals: dict = {}
     exec(python, _globals, _locals)
     _locals["execute"]()
 
 
-def transpile(node: ANode, **kwargs) -> ast.AST:
+def transpile(node: ANode, **kwargs):
+    "Translate from painless ast node into python ast node"
     if isinstance(node, SClass):
         return ast.Module(
             body=[
@@ -34,7 +39,7 @@ def transpile(node: ANode, **kwargs) -> ast.AST:
                 for s in node.function_nodes
             ],
             type_ignores=[],
-            _fields = ('body', 'type_ignores'),
+            _fields=("body", "type_ignores"),
             lineno=0,
             col_offset=0,
         )
@@ -50,22 +55,43 @@ def transpile(node: ANode, **kwargs) -> ast.AST:
             ),
             body=transpile(node.block_node, **kwargs),
             decorator_list=[],
-            _fields=('name', 'args', 'body', 'decorator_list'),
+            _fields=("name", "args", "body", "decorator_list"),
             lineno=0,
             col_offset=0,
         )
     if isinstance(node, SBlock):
-        return [
-            ast.Expr(value=transpile(s, **kwargs), _fields=('value',), lineno=0, col_offset=0)
-            for s in node.statement_nodes
+        transpiled_nodes = [
+            transpile(s, **kwargs) for s in node.statement_nodes
         ]
+        for i, transpiled_node in enumerate(transpiled_nodes):
+            if isinstance(transpiled_node, ast.expr):
+                transpiled_nodes[i] = ast.Expr(
+                    value=transpiled_node,
+                    _fields=("value",),
+                    lineno=0,
+                    col_offset=0,
+                )
+            elif isinstance(transpiled_node, ast.stmt):
+                pass
+            else:
+                raise NotImplementedError(
+                    f"should implement handler for {type(transpiled_node)}"
+                )
+        return transpiled_nodes
+    if isinstance(node, EAssignment):
+        return ast.Assign(
+            targets=[transpile(node.left_node, ctx=ast.Store())],
+            value=transpile(node.right_node, **kwargs),
+            lineno=0,
+            col_offset=0,
+        )
     if isinstance(node, ECall):
         return ast.Call(
             func=ast.Attribute(
                 value=transpile(node.prefix_node, **kwargs),
                 attr=node.method_name,
                 ctx=ast.Load(),
-                _fields=('value', 'attr', 'ctx'),
+                _fields=("value", "attr", "ctx"),
                 lineno=0,
                 col_offset=0,
             ),
@@ -73,7 +99,7 @@ def transpile(node: ANode, **kwargs) -> ast.AST:
             keywords=[],
             starargs=None,
             kwargs=None,
-            _fields=('func', 'args', 'starargs', 'keywords'),
+            _fields=("func", "args", "starargs", "keywords"),
             lineno=0,
             col_offset=0,
         )
@@ -82,7 +108,7 @@ def transpile(node: ANode, **kwargs) -> ast.AST:
             value=transpile(node.prefix_node, ctx=ast.Load()),
             slice=transpile(node.index_node, ctx=ast.Load()),
             ctx=kwargs["ctx"],
-            _fields=('value', 'slice', 'ctx'),
+            _fields=("value", "slice", "ctx"),
             lineno=0,
             col_offset=0,
         )
@@ -93,35 +119,64 @@ def transpile(node: ANode, **kwargs) -> ast.AST:
             value=transpile(node.prefix_node, ctx=ast.Load()),
             attr=node.index,
             ctx=kwargs["ctx"],
-            _fields=('value', 'attr', 'ctx'),
+            _fields=("value", "attr", "ctx"),
             lineno=0,
             col_offset=0,
         )
     if isinstance(node, ESymbol):
         return ast.Name(
-            id=node.symbol, ctx=kwargs["ctx"], _fields=('id', 'ctx'), lineno=0, col_offset=0
+            id=node.symbol,
+            ctx=kwargs["ctx"],
+            _fields=("id", "ctx"),
+            lineno=0,
+            col_offset=0,
         )
     if isinstance(node, EString):
-        return ast.Constant(value=node.string, _fields=('value',), lineno=0, col_offset=0)
+        return ast.Constant(
+            value=node.string, _fields=("value",), lineno=0, col_offset=0
+        )
     if isinstance(node, EDecimal):
-        return ast.Constant(value=node.decimal, _fields=('value',), lineno=0, col_offset=0)
+        return ast.Constant(
+            value=node.decimal, _fields=("value",), lineno=0, col_offset=0
+        )
     if isinstance(node, ENumeric):
         return ast.Constant(
-            value=int(node.numeric, base=node.radix), _fields=('value',), lineno=0, col_offset=0
+            value=int(node.numeric, base=node.radix),
+            _fields=("value",),
+            lineno=0,
+            col_offset=0,
         )
     if isinstance(node, EBooleanConstant):
         if node.constant is True:
-            return ast.Name(id="true", ctx=ast.Load(), _fields=('id', 'ctx'), lineno=0, col_offset=0)
+            return ast.Name(
+                id="true",
+                ctx=ast.Load(),
+                _fields=("id", "ctx"),
+                lineno=0,
+                col_offset=0,
+            )
         else:
-            return ast.Name(id="false", ctx=ast.Load(), _fields=('id', 'ctx'), lineno=0, col_offset=0)
+            return ast.Name(
+                id="false",
+                ctx=ast.Load(),
+                _fields=("id", "ctx"),
+                lineno=0,
+                col_offset=0,
+            )
     raise NotImplementedError(f"cannot transpile {node.__class__.__name__}")
 
 
 def parse(source: str):
+    "Parse the source into an painless ast node equivalent."
     yacc = typing.cast(
-        ply.yacc.LRParser, ply.yacc.yacc(module=PainlessParserModule(), debuglog=logger)
+        ply.yacc.LRParser,
+        ply.yacc.yacc(
+            module=PainlessParserModule(),
+            tabmodule="painless_parsetab",
+            debuglog=logger,
+        ),
     )
-    return yacc.parse(source)
+    return yacc.parse(source, lexer=ply.lex.lex(module=PainlessLexerModule()))
 
 
 class Operation(enum.Enum):
@@ -602,7 +657,11 @@ class SCatch(AStatement):
         self.block_node = block_node
 
     def __repr__(self) -> str:
-        return f"SCatch(base_exception={self.base_exception}, canonical_type_name='{self.canonical_type_name}', symbol='{self.symbol}', block_node={self.block_node})"
+        return (
+            f"SCatch(base_exception={self.base_exception}, "
+            f"canonical_type_name='{self.canonical_type_name}', "
+            f"symbol='{self.symbol}', block_node={self.block_node})"
+        )
 
 
 class SClass(ANode):
@@ -615,7 +674,7 @@ class SClass(ANode):
 
 class SContinue(AStatement):
     def __repr__(self) -> str:
-        return f"SContinue()"
+        return "SContinue()"
 
 
 class SDeclBlock(AStatement):
@@ -656,7 +715,10 @@ class SDo(AStatement):
         self.block_node = block_node
 
     def __repr__(self) -> str:
-        return f"SDo(condition_node={self.condition_node}, block_node={self.block_node})"
+        return (
+            f"SDo(condition_node={self.condition_node}, "
+            f"block_node={self.block_node})"
+        )
 
 
 class SEach(AStatement):
@@ -813,7 +875,10 @@ class STry(AStatement):
         self.catch_nodes = catch_nodes
 
     def __repr__(self) -> str:
-        return f"STry(block_node={self.block_node}, catch_nodes={self.catch_nodes})"
+        return (
+            f"STry(block_node={self.block_node}, "
+            f"catch_nodes={self.catch_nodes})"
+        )
 
 
 class SWhile(AStatement):
@@ -826,7 +891,10 @@ class SWhile(AStatement):
         self.block_node = block_node
 
     def __repr__(self) -> str:
-        return f"SWhile(condition_node={self.condition_node}, block_node={self.block_node})"
+        return (
+            f"SWhile(condition_node={self.condition_node}, "
+            f"block_node={self.block_node})"
+        )
 
 
 class PainlessLexerModule:
@@ -1017,11 +1085,12 @@ class PainlessLexerModule:
         t.type = PainlessLexerModule.keywords.get(t.value, "ID")
         return t
 
+    def t_error(self, t):
+        pass
+
 
 class PainlessParserModule:
     tokens = PainlessLexerModule.tokens
-
-    lexer = ply.lex.lex(module=PainlessLexerModule())
 
     precedence = (
         ("left", "ADD", "SUB"),

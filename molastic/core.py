@@ -7,21 +7,22 @@ import uuid
 import abc
 import enum
 import copy
-import functools
 import typing
+import decimal
 import datetime
 import dateutil.relativedelta
-import dataclasses
+import collections.abc
 import itertools
 import shapely.geometry
 import shapely.wkt
 import haversine
 import pygeohash
 
-from .utils import *
 
+from . import analysis
 from . import painless
 from . import java_json
+from . import utils
 
 
 class MISSING:
@@ -32,11 +33,19 @@ class ElasticError(Exception):
     pass
 
 
+class ResourceAlreadyExistsException(ElasticError):
+    pass
+
+
+class InvalidIndexNameException(ElasticError):
+    pass
+
+
 class IndexNotFoundException(ElasticError):
     pass
 
 
-class MappingParsingException(ElasticError):
+class StrictDynamicMappingException(ElasticError):
     pass
 
 
@@ -49,14 +58,6 @@ class IllegalArgumentException(ElasticError):
 
 
 class DateTimeParseException(ElasticError):
-    pass
-
-
-class VersionConflictException(ElasticError):
-    pass
-
-
-class ActionRequestValidationException(ElasticError):
     pass
 
 
@@ -84,54 +85,31 @@ class Tier(enum.Enum):
     DATA_FROZEN = "DATA_FROZEN"
 
 
-class OperationType(CaseInsensitveEnum):
+class OperationType(utils.CaseInsensitveEnum):
     INDEX = "INDEX"
     CREATE = "CREATE"
 
 
-class Refresh(CaseInsensitveEnum):
+class Refresh(utils.CaseInsensitveEnum):
     TRUE = True
     FALSE = False
     WAIT_FOR = "WAIT_FOR"
 
 
-class VersionType(CaseInsensitveEnum):
+class VersionType(utils.CaseInsensitveEnum):
     EXTERNAL = "EXTERNAL"
     EXTERNAL_GTE = "EXTERNAL_GTE"
 
 
-class OperationResult(CaseInsensitveEnum):
-    NOOP = "NOOP"
-    CREATED = "CREATED"
-    UPDATED = "UPDATED"
-    DELETED = "DELETED"
+class OperationResult(utils.CaseInsensitveEnum):
+    NOOP = "noop"
+    CREATED = "created"
+    UPDATED = "updated"
+    DELETED = "deleted"
+    NOT_FOUND = "not_found"
 
 
-@dataclasses.dataclass(frozen=True)
-class IndexOperationResult:
-    acknowledged: bool
-    shards_acknowleged: bool
-    index: str
-
-
-@dataclasses.dataclass(frozen=True)
-class DocumentOperationResult:
-    class Shards(typing.TypedDict):
-        total: int
-        successful: int
-        failed: int
-
-    _shards: DocumentOperationResult.Shards
-    _index: str
-    _id: str
-    _version: int
-    _seq_no: int
-    _primary_term: int
-    result: OperationResult
-
-
-@dataclasses.dataclass(frozen=True)
-class Document:
+class Document(typing.TypedDict):
     _index: Indice
     _id: str
     _type: str
@@ -151,53 +129,118 @@ class Document:
 
 class ElasticEngine:
     def __init__(self) -> None:
-        self._indices: typing.Dict[str, Indice] = {}
+        self._resources: typing.Dict[str, Indice] = {}
 
-    def indice(self, _id: str, create: bool = False) -> Indice:
-        if create and _id not in self._indices:
-            self._indices[_id] = Indice(_id)
+    def create_indice(
+        self,
+        _id: IndiceName,
+        aliases: typing.Optional[typing.List[str]] = None,
+        mappings: typing.Optional[typing.Mapping] = None,
+        settings: typing.Optional[typing.Mapping] = None,
+    ):
+        if _id in self._resources:
+            raise ResourceAlreadyExistsException(
+                f"index [{_id}] already exists"
+            )
+        self._resources[_id] = Indice(_id, aliases, mappings, settings)
+
+    def delete_indice(self, _id: IndiceName):
+        if not self.exists(_id):
+            raise IndexNotFoundException(f"No such index [{_id}]")
+        del self._resources[_id]
+
+    def indice(self, _id: IndiceName, autocreate: bool = False) -> Indice:
+        if not self.exists(_id) and autocreate:
+            self.create_indice(_id)
 
         try:
-            return self._indices[_id]
+            return self._resources[_id]
         except KeyError:
             raise IndexNotFoundException(f"No such index [{_id}]")
 
-    def indices(self, target: str) -> typing.Sequence[Indice]:
-        return tuple(i for i in self._indices.values() if i._id == target)
+    def resources(self, target: str) -> typing.Sequence[Indice]:
+        return tuple(v for k, v in self._resources.items() if k == target)
+
+    def exists(self, _id: str) -> bool:
+        return _id in self._resources
+
+
+class IndiceName(str):
+    @classmethod
+    def parse(cls, name) -> IndiceName:
+        if name is None:
+            raise InvalidIndexNameException("index name cannot be empty")
+
+        if isinstance(name, str):
+            return cls.parse_string(name)
+
+        raise InvalidIndexNameException()
+
+    @classmethod
+    def parse_string(cls, name: str) -> IndiceName:
+        if any(c.isalpha() and c == c.upper() for c in name):
+            raise InvalidIndexNameException(
+                f"Invalid index name [{name}], must be lowercase"
+            )
+
+        if any(c in ' "*\\<|,>/?' for c in name):
+            raise InvalidIndexNameException(
+                f"Invalid index name [{name}], must not contain "
+                'the following characters [ , ", *, \\, <, |, ,, >, /, ?]'
+            )
+
+        if ":" in name:
+            raise InvalidIndexNameException(
+                f"Invalid index name [{name}], must not contain [:]"
+            )
+
+        if any(name.startswith(c) for c in "-_+"):
+            raise InvalidIndexNameException(
+                f"Invalid index name [{name}], must not start "
+                "with '_', '-' or '+'"
+            )
+
+        return IndiceName(name)
 
 
 class Indice:
-    def __init__(self, _id: str) -> None:
+    def __init__(
+        self,
+        _id: IndiceName,
+        aliases: typing.Optional[typing.List[str]] = None,
+        mappings: typing.Optional[typing.Mapping] = None,
+        settings: typing.Optional[typing.Mapping] = None,
+    ) -> None:
         self._id = _id
 
-        self._sequence = itertools.count()
-        self._config = {"mappings": Mappings()}
+        self.sequence = itertools.count()
+        self.aliases: typing.Sequence[str] = []
+        self.mappers = Mappers()
+        self.settings: typing.Mapping = {
+            "index": {
+                "creation_date": datetime.datetime.now().timestamp(),
+                "number_of_shards": 1,
+                "number_of_replicas": 1,
+                "uuid": uuid.uuid4().hex,
+                "version": {"created": "135217827"},
+                "provided_name": self._id,
+            }
+        }
+        self.documents_by_id: typing.Dict[str, Document] = {}
 
-        self._documents_by_id: typing.Dict[str, Document] = {}
+        if mappings:
+            self.update_mappings(mappings)
 
     @property
-    def mappings(self) -> Mappings:
-        return self._config["mappings"]
+    def mappings(self) -> typing.Mapping:
+        return self.mappers.mappings
 
     @property
     def documents(self) -> typing.Sequence[Document]:
-        return self._documents_by_id.values()
+        return tuple(self.documents_by_id.values())
 
-    def config(self, body: dict) -> IndexOperationResult:
-        if "mappings" in body:
-            self._config["mappings"].merge(
-                Mappings.from_dict(body["mappings"])
-            )
-
-        return IndexOperationResult(
-            acknowledged=True, shards_acknowleged=True, index=self._id
-        )
-
-    def config_mappings(self, body: dict) -> IndexOperationResult:
-        self._config["mappings"].merge(Mappings.from_dict(body))
-        return IndexOperationResult(
-            acknowledged=True, shards_acknowleged=True, index=self._id
-        )
+    def update_mappings(self, mappings: typing.Mapping):
+        self.mappers.merge(mappings)
 
     def index(
         self,
@@ -214,7 +257,7 @@ class Indice:
         version_type: typing.Optional[VersionType] = None,
         wait_for_active_shards: str = "1",
         require_alias: bool = False,
-    ) -> DocumentOperationResult:
+    ) -> typing.Tuple[Document, OperationResult]:
 
         if id is None:
             id = self.create_document_id()
@@ -224,13 +267,12 @@ class Indice:
             raise ElasticError("document already exists")
 
         _version: int = 1
-        _stored_document = self._documents_by_id.get(id, None)
+        _stored_document = self.documents_by_id.get(id, None)
 
         if _stored_document is not None:
-            _version = _stored_document._version + 1
+            _version = _stored_document["_version"] + 1
 
         _source = body
-        self.infer_and_map_properties(_source)
 
         _document = Document(
             _index=self,
@@ -243,30 +285,21 @@ class Indice:
             _ignored=(),
             _routing=id,
             _meta={},
-            _tier=Tier.DATA_HOT,
-            _seq_no=next(self._sequence),
+            _tier=Tier.DATA_HOT.value,
+            _seq_no=next(self.sequence),
             _primary_term=1,
             _version=_version,
-            _stored_fields=None,
+            _stored_fields={},
         )
 
         self.make_searchable(_document)
 
-        return DocumentOperationResult(
-            _shards=DocumentOperationResult.Shards(
-                total=1, successful=1, failed=0
-            ),
-            _index=self._id,
-            _id=_document._id,
-            _version=_document._version,
-            _seq_no=_document._seq_no,
-            _primary_term=_document._primary_term,
-            result=(
-                OperationResult.CREATED
-                if not exists
-                else OperationResult.UPDATED
-            ),
-        )
+        if not exists:
+            operation_result = OperationResult.CREATED
+        else:
+            operation_result = OperationResult.UPDATED
+
+        return _document, operation_result
 
     def get(self):
         raise NotImplementedError()
@@ -281,22 +314,14 @@ class Indice:
         version: typing.Optional[int] = None,
         version_type: typing.Optional[VersionType] = None,
         wait_for_active_shards: str = "1",
-    ):
-        _stored_document = self._documents_by_id.get(id, None)
+    ) -> typing.Tuple[typing.Optional[Document], OperationResult]:
+        _stored_document = self.documents_by_id.get(id, None)
+        if _stored_document is None:
+            return None, OperationResult.NOT_FOUND
 
-        self._documents_by_id.pop(id)
+        self.documents_by_id.pop(id)
 
-        return DocumentOperationResult(
-            _shards=DocumentOperationResult.Shards(
-                total=1, successful=1, failed=0
-            ),
-            _index=self._id,
-            _id=_stored_document._id,
-            _version=_stored_document._version,
-            _seq_no=_stored_document._seq_no,
-            _primary_term=_stored_document._primary_term,
-            result=OperationResult.DELETED,
-        )
+        return _stored_document, OperationResult.DELETED
 
     def update(
         self,
@@ -314,19 +339,19 @@ class Indice:
         source_includes: typing.Sequence[str] = (),
         timeout: typing.Optional[str] = None,
         wait_for_active_shards: str = "1",
-    ) -> DocumentOperationResult:
+    ) -> typing.Tuple[Document, OperationResult]:
 
         _version: int = 1
 
-        _stored_document = self._documents_by_id.get(id, None)
+        _stored_document = self.documents_by_id.get(id, None)
 
         exists = False
         if _stored_document is not None:
             exists = True
 
         if _stored_document is not None:
-            _doc_base = _stored_document._source
-            _version = _stored_document._version + 1
+            _doc_base = _stored_document["_source"]
+            _version = _stored_document["_version"] + 1
         elif body.get("doc_as_upsert", False):
             _doc_base = body["doc"]
         elif body.get("upsert", None) is not None:
@@ -338,19 +363,16 @@ class Indice:
         if "script" in body:
             _source = _doc_base_copy
 
-            java_ctx = java_json.loads(json.dumps({"_source": _source}))
-
             scripting = Scripting.parse(body["script"])
-            scripting.execute({"ctx": java_ctx})
 
-            python_ctx = json.loads(java_json.dumps(java_ctx))
-            
-            _source = python_ctx["_source"]
+            ctx = scripting.dumps({"_source": _source})
+
+            scripting.execute({"ctx": ctx})
+
+            _source = scripting.loads(ctx)["_source"]
 
         elif "doc" in body:
-            _source = source_merger.merge(_doc_base_copy, body["doc"])
-
-        self.infer_and_map_properties(_source)
+            _source = utils.source_merger.merge(_doc_base_copy, body["doc"])
 
         _document = Document(
             _index=self,
@@ -363,30 +385,21 @@ class Indice:
             _ignored=(),
             _routing=id,
             _meta={},
-            _tier=Tier.DATA_HOT,
-            _seq_no=next(self._sequence),
+            _tier=Tier.DATA_HOT.value,
+            _seq_no=next(self.sequence),
             _primary_term=1,
             _version=_version,
-            _stored_fields=None,
+            _stored_fields={},
         )
 
         self.make_searchable(_document)
 
-        return DocumentOperationResult(
-            _shards=DocumentOperationResult.Shards(
-                total=1, successful=1, failed=0
-            ),
-            _index=self._id,
-            _id=_document._id,
-            _version=_document._version,
-            _seq_no=_document._seq_no,
-            _primary_term=_document._primary_term,
-            result=(
-                OperationResult.CREATED
-                if not exists
-                else OperationResult.UPDATED
-            ),
-        )
+        if not exists:
+            operation_result = OperationResult.CREATED
+        else:
+            operation_result = OperationResult.UPDATED
+
+        return _document, operation_result
 
     def multi_get(self):
         raise NotImplementedError()
@@ -401,157 +414,649 @@ class Indice:
         raise NotImplementedError()
 
     def exists(self, _id: str) -> bool:
-        return _id in self._documents_by_id
+        return _id in self.documents_by_id
 
     def create_document_id(self) -> str:
         return str(uuid.uuid4())
 
-    def infer_and_map_properties(self, source: dict):
-        self.mappings.merge(infer_dynamic_mapping(source), ignore_errors=True)
-
     def make_searchable(self, document: Document):
-        self._documents_by_id[document._id] = document
+        self.mappers.dynamic_map(document["_source"])
+
+        self.documents_by_id[document["_id"]] = document
 
 
-class Mappings:
-    def __init__(self) -> None:
-        self._properties = Properties()
+class Mapper(abc.ABC):
+    def __init__(self, fieldpath: str, type: str) -> None:
+        self.fieldpath = fieldpath
+        self.fieldmapping: typing.MutableMapping[str, typing.Any] = {
+            "type": type
+        }
+
+    @property
+    def fieldname(self) -> str:
+        return self.fieldpath.split(".")[-1]
+
+    @property
+    def type(self) -> str:
+        return self.fieldmapping["type"]
+
+    @property
+    def mappings(self) -> typing.Mapping:
+        return self.fieldmapping
+
+    @abc.abstractmethod
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        "Create merger functions. A merger function merges actual with new mappings"
+        pass
+
+    @abc.abstractmethod
+    def map(self, body) -> typing.Iterable[Value]:
+        "Create runtime value given a source body"
+        pass
+
+
+class ObjectMapper(Mapper, collections.abc.MutableMapping):
+    @property
+    def mappings(self) -> dict:
+        if "properties" in self.fieldmapping:
+            return {
+                "properties": {
+                    k: typing.cast(Mapper, v).mappings
+                    for k, v in self.fieldmapping["properties"].items()
+                }
+            }
+        else:
+            return {}
+
+    def __getitem__(self, __k):
+        return self.fieldmapping["properties"][__k]
+
+    def __setitem__(self, __k, __v):
+        if "properties" not in self.fieldmapping:
+            self.fieldmapping["properties"] = {}
+        self.fieldmapping["properties"][__k] = __v
+
+    def __delitem__(self, __k):
+        del self.fieldmapping["properties"][__k]
 
     def __iter__(self):
-        return (
-            (
-                i[0]
-                .replace(".properties.", ".")
-                .replace("properties.", "")
-                .replace(".properties.", ""),
-                i[1],
+        return iter(self.fieldmapping["properties"])
+
+    def __len__(self):
+        return len(self.fieldmapping["properties"])
+
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        for paramname in fieldmapping:
+            if paramname == "properties":
+                pass
+            else:
+                raise MapperParsingException(
+                    f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
+                )
+        return []
+
+    def map(self, body) -> typing.Iterable[Value]:
+        raise TypeError("should not map")
+
+
+class KeywordMapper(Mapper):
+    @property
+    def ignore_above(self) -> int:
+        return self.fieldmapping.get("ignore_above", 2147483647)
+
+    @ignore_above.setter
+    def ignore_above(self, ignore_above):
+        self.fieldmapping["ignore_above"] = ignore_above
+
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        mergers: typing.List[typing.Callable[[], None]] = []
+        for paramname in fieldmapping:
+            if paramname == "ignore_above":
+                mergers.append(
+                    lambda: setattr(
+                        self, "ignore_above", fieldmapping[")ignore_above"]
+                    )
+                )
+            else:
+                raise MapperParsingException(
+                    f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
+                )
+        return mergers
+
+    def map(self, body) -> typing.Iterable[Keyword]:
+        return Keyword.parse(body)
+
+
+class BooleanMapper(Mapper):
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        for paramname in fieldmapping:
+            raise MapperParsingException(
+                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
             )
-            for i in flatten(self._properties)
-            if isinstance(i[1], (Properties, Type))
+        return []
+
+    def map(self, body) -> typing.Iterable[Value]:
+        return Boolean.parse(body)
+
+
+class FloatMapper(Mapper):
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        for paramname in fieldmapping:
+            raise MapperParsingException(
+                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
+            )
+        return []
+
+    def map(self, body) -> typing.Iterable[Float]:
+        return Float.parse(body)
+
+
+class DoubleMapper(Mapper):
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        for paramname in fieldmapping:
+            raise MapperParsingException(
+                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
+            )
+        return []
+
+    def map(self, body) -> typing.Iterable[Value]:
+        return Double.parse(body)
+
+
+class LongMapper(Mapper):
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        for paramname in fieldmapping:
+            raise MapperParsingException(
+                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
+            )
+        return []
+
+    def map(self, body) -> typing.Iterable[Long]:
+        return Long.parse(body)
+
+
+class DateMapper(Mapper):
+    @property
+    def format(self) -> str:
+        return self.fieldmapping.get(
+            "format", "strict_date_optional_time||epoch_millis"
         )
 
-    def map(self, field: str, prop: typing.Any) -> None:
-        ref = self._properties
-        keys = field.split(".")
+    @format.setter
+    def format(self, format):
+        Date.parse_date_format(format)
+        self.fieldmapping["format"] = format
 
-        for key in keys[0:-1]:
-            ref = ref[key]
+    def __repr__(self):
+        return f"DateMapper(format={repr(self.format)})"
 
-        ref[keys[-1]] = prop
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        mergers: typing.List[typing.Callable[[], None]] = []
+        for paramname in fieldmapping:
+            if paramname == "format":
+                mergers.append(
+                    lambda: setattr(self, "format", fieldmapping["format"])
+                )
+            else:
+                raise MapperParsingException(
+                    f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
+                )
+        return mergers
 
-    def get(
-        self, field: str, _default: typing.Any = MISSING
-    ) -> typing.Union[Properties, Type]:
-        ref = self._properties
-        keys = field.split(".")
+    @typing.overload
+    def map(self, body) -> typing.Iterable[Date]:
+        ...
+
+    @typing.overload
+    def map(self, body, format: str) -> typing.Iterable[Date]:
+        ...
+
+    def map(
+        self, body, format: typing.Optional[str] = None
+    ) -> typing.Iterable[Date]:
+        return Date.parse(body, format or self.format)
+
+
+class TextMapper(Mapper):
+    default_analyzer = analysis.StandardAnalyzer()
+
+    def __init__(self, fieldpath: str, type: str) -> None:
+        super().__init__(fieldpath, type)
+        self._analyzer: analysis.Analyzer = self.default_analyzer
+
+    @property
+    def analyzer(self) -> analysis.Analyzer:
+        return self._analyzer
+
+    @analyzer.setter
+    def analyzer(self, analyzer: str):
+        self._analyzer = self.create_analyzer(analyzer)
+
+    def create_analyzer(self, analyzer: str) -> analysis.Analyzer:
+        if analyzer == "standard":
+            return self.default_analyzer
+        else:
+            raise NotImplementedError(f"analyzer: {analyzer}")
+
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        mergers: typing.List[typing.Callable[[], None]] = []
+        for paramname in fieldmapping:
+            if paramname == "analyzer":
+                mergers.append(
+                    lambda: (
+                        setattr(self, "analyzer", fieldmapping["analyzer"])
+                    )
+                )
+            else:
+                raise MapperParsingException(
+                    f"unknown parameter [{paramname}] on mapper "
+                    f"[{self.fieldname}] of type [{self.type}]"
+                )
+        return mergers
+
+    @typing.overload
+    def map(self, body) -> typing.Iterable[Text]:
+        ...
+
+    @typing.overload
+    def map(self, body, analyzer: analysis.Analyzer) -> typing.Iterable[Text]:
+        ...
+
+    def map(
+        self, body, analyzer: typing.Optional[analysis.Analyzer] = None
+    ) -> typing.Iterable[Text]:
+        return Text.parse(body, analyzer or self.analyzer)
+
+
+class GeopointMapper(Mapper):
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        for paramname in fieldmapping:
+            raise MapperParsingException(
+                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
+            )
+        return []
+
+    def map(self, body) -> typing.Iterable[Geopoint]:
+        return Geopoint.parse(body)
+
+
+class GeoshapeMapper(Mapper):
+    def merge(
+        self, fieldmapping: typing.Mapping
+    ) -> typing.Iterable[typing.Callable[[], None]]:
+        for paramname in fieldmapping:
+            raise MapperParsingException(
+                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
+            )
+        return []
+
+    def map(self, body) -> typing.Iterable[Geoshape]:
+        return Geoshape.parse(body)
+
+
+class DynamicMapping:
+    class Dynamic(utils.CaseInsensitveEnum):
+        true = "true"
+        runtime = "runtime"
+        false = "false"
+        strict = "strict"
+
+    def __init__(
+        self,
+        dynamic: Dynamic = Dynamic.true,
+        date_detection: bool = True,
+        dynamic_date_formats: typing.Sequence[str] = [
+            "strict_date_optional_time",
+            "yyyy/MM/dd HH:mm:ss||yyyy/MM/dd",
+        ],
+        numeric_detection: bool = True,
+    ) -> None:
+        self.dynamic = dynamic
+        self.date_detection = date_detection
+        self.dynamic_date_formats = dynamic_date_formats
+        self.numeric_detection = numeric_detection
+
+    def map(self, value) -> typing.Optional[typing.Mapping]:
+        """Value in the document to infer data type.
+        Returns None if the field should not be mapped.
+        """
+        if self.dynamic == DynamicMapping.Dynamic.false:
+            return None
+
+        if self.dynamic == DynamicMapping.Dynamic.strict:
+            return None
+
+        while utils.is_array(value):
+            if len(value) == 0:
+                value = None
+            else:
+                value = value[0]
+
+        if value is None:
+            return None
+
+        if isinstance(value, bool):
+            return {"type": "boolean"}
+        elif isinstance(value, float):
+            if self.dynamic == DynamicMapping.Dynamic.true:
+                return {"type": "float"}
+            elif self.dynamic == DynamicMapping.Dynamic.runtime:
+                return {"type": "double"}
+            else:
+                raise Exception("should not be here, report error")
+        elif isinstance(value, int):
+            return {"type": "long"}
+        elif isinstance(value, str):
+            if self.numeric_detection and Long.match_pattern(value):
+                return {"type": "long"}
+            elif (
+                self.numeric_detection
+                and self.dynamic == DynamicMapping.Dynamic.true
+                and Float.match_pattern(value)
+            ):
+                return {"type": "float"}
+            elif (
+                self.numeric_detection
+                and self.dynamic == DynamicMapping.Dynamic.runtime
+                and Double.match_pattern(value)
+            ):
+                return {"type": "boolean"}
+            elif self.date_detection and Date.match_date_format(
+                value, "||".join(self.dynamic_date_formats)
+            ):
+                return {"type": "date"}
+            else:
+                if self.dynamic == DynamicMapping.Dynamic.true:
+                    return {"type": "text"}
+                elif self.dynamic == DynamicMapping.Dynamic.runtime:
+                    return {"type": "keyword"}
+                else:
+                    raise Exception("should not be here, report error")
+        elif isinstance(value, dict):
+            if self.dynamic == DynamicMapping.Dynamic.true:
+                return {"type": "object", "properties": {}}
+            else:
+                return None
+        else:
+            raise NotImplementedError(type(value), value)
+
+
+class Mappers:
+
+    MAPPERS: typing.Mapping[str, typing.Type[Mapper]] = {
+        "object": ObjectMapper,
+        "keyword": KeywordMapper,
+        "boolean": BooleanMapper,
+        "long": LongMapper,
+        "float": FloatMapper,
+        "double": DoubleMapper,
+        "date": DateMapper,
+        "text": TextMapper,
+        "geo_point": GeopointMapper,
+        "geo_shape": GeoshapeMapper,
+    }
+
+    def __init__(
+        self,
+        dynamic_mapping: typing.Optional[DynamicMapping] = None,
+    ) -> None:
+        self.dynamic_mapping: DynamicMapping
+        if dynamic_mapping is None:
+            self.dynamic_mapping = DynamicMapping()
+        else:
+            self.dynamic_mapping = dynamic_mapping
+
+        self.fieldmappers: typing.Dict[str, Mapper] = {}
+
+    def __iter__(self):
+        yield from utils.flatten(self.fieldmappers)
+
+    @property
+    def mappings(self) -> typing.Mapping:
+        return {
+            "properties": {
+                k: typing.cast(Mapper, v).mappings
+                for k, v in self.fieldmappers.items()
+            }
+        }
+
+    def put(
+        self,
+        fieldpath: str,
+        fieldmapper: Mapper,
+    ) -> None:
+        segments = fieldpath.split(".")
+
+        fragment = utils.get_from_mapping(segments[:-1], self.fieldmappers)
+        fragment[segments[-1]] = fieldmapper
+
+    def get(self, fieldpath: str, _default: typing.Any = MISSING) -> Mapper:
+        segments = fieldpath.split(".")
 
         try:
-            for key in keys[0:-1]:
-                ref = ref[key]
-
-            return ref[keys[-1]]
+            return utils.get_from_mapping(segments[:-1], self.fieldmappers)[
+                segments[-1]
+            ]
         except KeyError as e:
             if _default is MISSING:
                 raise e
-
             return _default
 
-    def merge(self, mappings: Mappings, ignore_errors: bool = False) -> None:
-        blacklist = []
+    def has(self, fieldpath: str) -> bool:
+        segments = fieldpath.split(".")
 
-        for k, new_mapped in iter(mappings):
-            if any(k.startswith(i) for i in blacklist):
+        try:
+            fragment = utils.get_from_mapping(segments[:-1], self.fieldmappers)
+            return segments[-1] in fragment
+        except KeyError:
+            return False
+
+    def merge(self, mappings: typing.Mapping) -> None:
+        patterns = [re.compile("^properties.\\w+$")]
+
+        mergers: typing.List[typing.Callable[[], None]] = []
+        for mappings_path, new_fieldmapping in utils.flatten(mappings):
+            # Only if match any pattern is a field
+            # otherwise could be a some field property
+            if not any(p.match(mappings_path) for p in patterns):
                 continue
 
-            old_mapped = self.get(k, None)
-
-            if old_mapped is None:
-                # k never been mapped, map
-                self.map(k, new_mapped)
-            elif isinstance(old_mapped, Type) and isinstance(
-                new_mapped, Properties
-            ):
-                # k already mapped and new map as properties
-                # ignore k and all sub-maps
-                blacklist.append(k)
-                continue
-            elif isinstance(new_mapped, Properties):
-                # only type should be mapped
-                continue
-            else:
-                # if changing type, error
-                # otherwise, ignore k and all sub-maps
-                old_type = old_mapped["type"]
-                new_type = new_mapped["type"]
-                if old_type != new_type:
-                    blacklist.append(k)
-
-                    if not ignore_errors:
-                        raise IllegalArgumentException(
-                            f"mapper [{k}] cannot be changed from "
-                            f"type [{old_type}] to [{new_type}]"
-                        )
-
-    def __repr__(self):
-        return repr(self._properties)
-
-    @classmethod
-    def from_dict(cls, mappings: dict) -> Mappings:
-        _mappings = Mappings()
-
-        mapped_keys = []
-
-        for k, v in flatten(mappings):
-            if k == "properties":
+            segments = mappings_path.split(".")[1::2]
+            if len(segments) == 0:
+                # Match the first "properties"
                 continue
 
-            if k.endswith(".properties"):
-                continue
+            fieldpath = ".".join(segments)
 
-            if any(k.startswith(mk) for mk in mapped_keys):
-                continue
+            actual_fieldmapper = self.get(fieldpath, None)
 
-            cleansed_k = (
-                k.replace(".properties.", ".")
-                .replace("properties.", "")
-                .replace(".properties", "")
-            )
+            if new_fieldmapping.get("type", "object") == "object":
+                # Allow to iterate over object.properties
+                patterns.append(
+                    re.compile(f"^{mappings_path}.properties.\\w+$")
+                )
 
-            if isinstance(v, dict):
-                if "type" in v:
-                    _mappings.map(cleansed_k, Type(v))
-                elif "properties" in v:
-                    _mappings.map(cleansed_k, Properties())
-                else:
-                    raise MappingParsingException(
-                        f"No type specified for field [{cleansed_k}]"
+            if actual_fieldmapper is None:
+                # Will put new fieldmapper
+                new_type = new_fieldmapping.get("type", "object")
+                try:
+                    clstype = Mappers.MAPPERS[new_type]
+                except KeyError:
+                    raise MapperParsingException(
+                        f"No handler for type [{new_type}] declared on field [{segments[-1]}]"
                     )
 
-                mapped_keys.append(k)
+                fieldmapper = clstype(fieldpath, new_type)
+                assert isinstance(fieldmapper, Mapper)
 
-        return _mappings
+                mergers.extend(
+                    fieldmapper.merge(
+                        {
+                            k: v
+                            for k, v in new_fieldmapping.items()
+                            if k != "type"
+                        }
+                    )
+                )
+                self.put(fieldpath, fieldmapper)
 
+            else:
+                # Mappings already exists, should update
+                # the actual fieldmapping and fieldmapper
+                actual_type = actual_fieldmapper.type
+                new_type = new_fieldmapping.get("type", "object")
+                if actual_type != new_type:
+                    raise IllegalArgumentException(
+                        f"mapper [{segments[-1]}] cannot be changed from "
+                        f"type [{actual_type}] to [{new_type}]"
+                    )
 
-class Properties(dict):
-    def __init__(self, *args, **kwargs):
-        dict.__setitem__(self, "properties", {})
+                mergers.extend(
+                    actual_fieldmapper.merge(
+                        {
+                            k: v
+                            for k, v in new_fieldmapping.items()
+                            if k != "type"
+                        }
+                    )
+                )
 
-        super().__init__(*args, **kwargs)
+        for merger in mergers:
+            merger()
 
-    def __setitem__(self, __k, __v) -> None:
-        properties = dict.__getitem__(self, "properties")
-        properties[__k] = __v
+    def dynamic_map(self, source: dict) -> None:
+        allowed_prefixes: typing.List[str] = []
 
-    def __getitem__(self, __k):
-        if __k == "properties":
-            return dict.__getitem__(self, __k)
-        else:
-            properties = dict.__getitem__(self, "properties")
-            return properties[__k]
+        mergers: typing.List[typing.Callable[[], None]] = []
+        for fieldpath, fieldvalue in utils.flatten(source):
+            if fieldpath.count(".") > 0:
+                # Child node
+                if not any(fieldpath.startswith(f) for f in allowed_prefixes):
+                    # If not child node of ObjectMapper, ignore
+                    continue
 
+            if self.has(fieldpath):
+                # Let to visit child nodes if is ObjectMapper
+                fieldmapper = self.get(fieldpath)
+                if fieldmapper.type == "object":
+                    allowed_prefixes.append(fieldpath)
+                # Ignore known mapper
+                continue
 
-class Type(dict):
-    pass
+            segments = fieldpath.split(".")
+
+            if self.dynamic_mapping.dynamic == DynamicMapping.Dynamic.strict:
+                parent_segment = segments[-2] if len(segments) > 1 else "_doc"
+                raise StrictDynamicMappingException(
+                    f"mapping set to strict, dynamic introduction of [{fieldpath}] within [{parent_segment}] is not allowed"
+                )
+
+            fieldmapping = self.dynamic_mapping.map(fieldvalue)
+            if fieldmapping is None:
+                continue
+
+            fieldtype = fieldmapping.get("type", "object")
+            if fieldtype == "object":
+                # Let visit object child nodes
+                allowed_prefixes.append(fieldpath)
+
+            try:
+                clstype = Mappers.MAPPERS[fieldtype]
+            except KeyError:
+                raise MapperParsingException(
+                    f"No handler for type [{fieldtype}] declared on field [{segments[-1]}]"
+                )
+
+            fieldmapper = clstype(fieldpath, fieldtype)
+            assert isinstance(fieldmapper, Mapper)
+
+            mergers.extend(
+                fieldmapper.merge(
+                    {k: v for k, v in fieldmapping.items() if k != "type"}
+                )
+            )
+            self.put(fieldpath, fieldmapper)
+
+        for merger in mergers:
+            merger()
+
+    def __repr__(self):
+        return repr(self.fieldmappers)
+
+    @classmethod
+    def parse(cls, mappings: typing.Mapping) -> Mappers:
+        if any(True for k in mappings.keys() if k != "properties"):
+            raise MapperParsingException(
+                f"Root mapping definition has unsupported parameters: {mappings}"
+            )
+
+        mappers = Mappers()
+
+        patterns = [re.compile("^properties.\\w+$")]
+
+        mergers: typing.List[typing.Callable[[], None]] = []
+        for mapping_k, mapping_v in utils.flatten(mappings):
+            if not any(p.match(mapping_k) for p in patterns):
+                continue
+
+            segments = mapping_k.split(".")[1::2]
+            if len(segments) == 0:
+                continue
+
+            if not isinstance(mapping_v, collections.abc.Mapping):
+                raise MapperParsingException(
+                    f"Expected map for property [properties] "
+                    f"on field [{segments[-1]}] but got {mapping_v}"
+                )
+
+            fieldpath = ".".join(segments)
+            fieldtype = mapping_v.get("type", "object")
+
+            if fieldtype == "object":
+                # Let visit object child nodes
+                patterns.append(re.compile(f"^{mapping_k}.properties.\\w+$"))
+
+            try:
+                clstype = Mappers.MAPPERS[fieldtype]
+            except KeyError:
+                raise MapperParsingException(
+                    f"No handler for type [{fieldtype}] declared on field [{segments[-1]}]"
+                )
+
+            fieldmapper = clstype(fieldpath, fieldtype)
+            assert isinstance(fieldmapper, Mapper)
+
+            mergers.extend(
+                fieldmapper.merge(
+                    {k: v for k, v in mapping_v.items() if k != "type"}
+                )
+            )
+            mappers.put(fieldpath, fieldmapper)
+
+        for merger in mergers:
+            merger()
+
+        return mappers
 
 
 class Object(dict):
@@ -561,7 +1066,10 @@ class Object(dict):
 
 class Value(abc.ABC):
     def __init__(
-        self, value: typing.Union[str, int, float, bool, dict, None]
+        self,
+        value: typing.Union[
+            str, int, float, bool, dict, typing.Sequence, decimal.Decimal, None
+        ],
     ) -> None:
         self.value = value
 
@@ -585,7 +1093,7 @@ class Keyword(Value):
     def __init__(self, value) -> None:
         super().__init__(value)
 
-    def __eq__(self, __o: Value) -> bool:
+    def __eq__(self, __o: object) -> bool:
         if not isinstance(__o, Keyword):
             return False
 
@@ -596,7 +1104,7 @@ class Keyword(Value):
 
     @classmethod
     def parse(cls, body) -> typing.Iterable[Keyword]:
-        return tuple(cls.parse_single(i) for i in walk_json_field(body))
+        return tuple(cls.parse_single(i) for i in utils.walk_json_field(body))
 
     @classmethod
     def parse_single(cls, body) -> Keyword:
@@ -612,7 +1120,7 @@ class Boolean(Value):
 
     @classmethod
     def parse(cls, body) -> typing.Iterable[Boolean]:
-        return tuple(cls.parse_single(i) for i in walk_json_field(body))
+        return tuple(cls.parse_single(i) for i in utils.walk_json_field(body))
 
     @classmethod
     def parse_single(cls, body: typing.Union[str, bool]) -> Boolean:
@@ -648,16 +1156,38 @@ class Float(Value):
     def __repr__(self):
         return f"Float({self.value})"
 
+    def __ge__(self, __o: Float) -> bool:
+        assert isinstance(self.value, float)
+        assert isinstance(__o.value, float)
+        return self.value >= __o.value
+
+    def __gt__(self, __o: Float) -> bool:
+        assert isinstance(self.value, float)
+        assert isinstance(__o.value, float)
+        return self.value > __o.value
+
+    def __le__(self, __o: Float) -> bool:
+        assert isinstance(self.value, float)
+        assert isinstance(__o.value, float)
+        return self.value <= __o.value
+
+    def __lt__(self, __o: Float) -> bool:
+        assert isinstance(self.value, float)
+        assert isinstance(__o.value, float)
+        return self.value < __o.value
+
     @classmethod
     def match_pattern(cls, body: str) -> bool:
-        return Float.PATTERN.match(body)
+        return Float.PATTERN.match(body) is not None
 
     @classmethod
     def parse(cls, body) -> typing.Iterable[Float]:
-        return tuple(cls.parse_single(i) for i in walk_json_field(body))
+        return tuple(
+            [cls.parse_single(i) for i in utils.walk_json_field(body)]
+        )
 
     @classmethod
-    def parse_single(cls, body: typing.Union[str, int, float]) -> Long:
+    def parse_single(cls, body: typing.Union[str, int, float]) -> Float:
         if isinstance(body, str):
             return cls.parse_string(body)
         if isinstance(body, (int, float)):
@@ -667,31 +1197,112 @@ class Float(Value):
 
     @classmethod
     def parse_string(cls, body: str) -> Float:
-        if match_numeric_pattern(body):
-            return cls.parse_numeric(float(body))
+        if utils.match_numeric_pattern(body):
+            return cls.parse_numeric(body)
 
-        raise NumberFormatException(f"For input string: \"{body}\"")
+        raise NumberFormatException(f'For input string: "{body}"')
 
     @classmethod
-    def parse_numeric(cls, body: typing.Union[int, float]) -> Float:
+    def parse_numeric(cls, body: typing.Union[str, int, float]) -> Float:
         return Float(float(body))
+
+
+class Double(Value):
+    PATTERN = re.compile(r"^\d+(\.\d+)?$")
+
+    def __init__(self, value: decimal.Decimal) -> None:
+        super().__init__(value)
+
+    def __repr__(self):
+        return f"Double({self.value})"
+
+    def __ge__(self, __o: Double) -> bool:
+        assert isinstance(self.value, decimal.Decimal)
+        assert isinstance(__o.value, decimal.Decimal)
+        return self.value >= __o.value
+
+    def __gt__(self, __o: Double) -> bool:
+        assert isinstance(self.value, decimal.Decimal)
+        assert isinstance(__o.value, decimal.Decimal)
+        return self.value > __o.value
+
+    def __le__(self, __o: Double) -> bool:
+        assert isinstance(self.value, decimal.Decimal)
+        assert isinstance(__o.value, decimal.Decimal)
+        return self.value <= __o.value
+
+    def __lt__(self, __o: Double) -> bool:
+        assert isinstance(self.value, decimal.Decimal)
+        assert isinstance(__o.value, decimal.Decimal)
+        return self.value < __o.value
+
+    @classmethod
+    def match_pattern(cls, body: str) -> bool:
+        return Double.PATTERN.match(body) is not None
+
+    @classmethod
+    def parse(cls, body) -> typing.Iterable[Double]:
+        return tuple(
+            [cls.parse_single(i) for i in utils.walk_json_field(body)]
+        )
+
+    @classmethod
+    def parse_single(cls, body: typing.Union[str, int, float]) -> Double:
+        if isinstance(body, str):
+            return cls.parse_string(body)
+        if isinstance(body, (int, float)):
+            return cls.parse_numeric(body)
+
+        raise ParsingException("numeric expected")
+
+    @classmethod
+    def parse_string(cls, body: str) -> Double:
+        if utils.match_numeric_pattern(body):
+            return cls.parse_numeric(body)
+
+        raise NumberFormatException(f'For input string: "{body}"')
+
+    @classmethod
+    def parse_numeric(cls, body: typing.Union[str, int, float]) -> Double:
+        return Double(decimal.Decimal(body))
 
 
 class Long(Value):
     PATTERN = re.compile(r"^\d+$")
+
     def __init__(self, value: int) -> None:
         super().__init__(value)
 
     def __repr__(self):
         return f"Long({self.value})"
 
+    def __ge__(self, __o: Long) -> bool:
+        assert isinstance(self.value, int)
+        assert isinstance(__o.value, int)
+        return self.value >= __o.value
+
+    def __gt__(self, __o: Long) -> bool:
+        assert isinstance(self.value, int)
+        assert isinstance(__o.value, int)
+        return self.value > __o.value
+
+    def __le__(self, __o: Long) -> bool:
+        assert isinstance(self.value, int)
+        assert isinstance(__o.value, int)
+        return self.value <= __o.value
+
+    def __lt__(self, __o: Long) -> bool:
+        assert isinstance(self.value, int)
+        assert isinstance(__o.value, int)
+        return self.value < __o.value
+
     @classmethod
     def match_pattern(cls, value: str) -> bool:
-        return Long.PATTERN.match(value)
+        return Long.PATTERN.match(value) is not None
 
     @classmethod
     def parse(cls, body) -> typing.Iterable[Long]:
-        return tuple(cls.parse_single(i) for i in walk_json_field(body))
+        return tuple(cls.parse_single(i) for i in utils.walk_json_field(body))
 
     @classmethod
     def parse_single(cls, body: typing.Union[str, int, float]) -> Long:
@@ -704,10 +1315,10 @@ class Long(Value):
 
     @classmethod
     def parse_string(cls, body: str) -> Long:
-        if match_numeric_pattern(body):
+        if utils.match_numeric_pattern(body):
             return cls.parse_numeric(int(body))
 
-        raise NumberFormatException(f"For input string: \"{body}\"")
+        raise NumberFormatException(f'For input string: "{body}"')
 
     @classmethod
     def parse_numeric(cls, body: typing.Union[int, float]) -> Long:
@@ -722,17 +1333,21 @@ class Date(Value):
         r"^(?P<anchor>\w+)\|\|((?P<delta_measure>[-+]\d+)(?P<delta_unit>[yMwdhHms]))?(/(?P<round_unit>[yMwdhHms]))?$"
     )
 
-    def __init__(self, value: typing.Union[str, int], format: str) -> None:
+    def __init__(
+        self, value: typing.Union[str, int, float], format: str
+    ) -> None:
         super().__init__(value)
         self.format = format
 
         if format == "epoch_millis":
-            self.datetime = datetime.datetime.utcfromtimestamp(value / 1000)
+            self.datetime = datetime.datetime.utcfromtimestamp(
+                float(value) / 1000
+            )
         elif format == "epoch_second":
-            self.datetime = datetime.datetime.utcfromtimestamp(value)
+            self.datetime = datetime.datetime.utcfromtimestamp(float(value))
         else:
             self.datetime = datetime.datetime.strptime(
-                value, transpose_date_format(format)
+                str(value), utils.transpose_date_format(format)
             )
 
     def __repr__(self):
@@ -787,7 +1402,9 @@ class Date(Value):
         return formats
 
     @classmethod
-    def match_date_format(cls, value: str, format: str) -> bool:
+    def match_date_format(
+        cls, value: typing.Union[str, int, float], format: str
+    ) -> bool:
         "Test if value match with java date format"
         for f in cls.parse_date_format(format):
             f_upper = f.upper()
@@ -797,7 +1414,7 @@ class Date(Value):
                     continue
 
                 try:
-                    datetime.datetime.utcfromtimestamp(value / 1000)
+                    datetime.datetime.utcfromtimestamp(float(value) / 1000)
                     return True
                 except ValueError:
                     pass
@@ -807,28 +1424,34 @@ class Date(Value):
                     continue
 
                 try:
-                    datetime.datetime.utcfromtimestamp(value)
+                    datetime.datetime.utcfromtimestamp(float(value))
                     return True
                 except ValueError:
                     pass
 
             else:
                 try:
-                    datetime.datetime.strptime(value, transpose_date_format(f))
+                    datetime.datetime.strptime(
+                        str(value), utils.transpose_date_format(f)
+                    )
                     return True
                 except ValueError:
                     pass
                 except re.error:
-                    raise Exception(transpose_date_format(f))
+                    raise Exception(utils.transpose_date_format(f))
 
         return False
 
     @classmethod
     def parse(cls, body, format: str) -> typing.Iterable[Date]:
-        return tuple(cls.parse_single(i, format) for i in walk_json_field(body))
+        return tuple(
+            cls.parse_single(i, format) for i in utils.walk_json_field(body)
+        )
 
     @classmethod
-    def parse_single(cls, body: typing.Union[str, int], format: str) -> Date:
+    def parse_single(
+        cls, body: typing.Union[str, int, float], format: str
+    ) -> Date:
         for f in cls.parse_date_format(format):
             if cls.match_date_format(body, f):
                 return Date(body, f)
@@ -839,14 +1462,18 @@ class Date(Value):
 
     @classmethod
     def match_date_math_pattern(cls, body: str) -> bool:
-        return Date.ANCHOR_PATTERN.match(body) or Date.NOW_PATTERN.match(body)
+        return (
+            Date.ANCHOR_PATTERN.match(body) is not None
+            or Date.NOW_PATTERN.match(body) is not None
+        )
 
     @classmethod
     def parse_date_math(cls, body: str) -> Date:
         match_anchor = Date.ANCHOR_PATTERN.match(body)
         if match_anchor is not None:
-            dt = cls.parse(match_anchor.group("anchor"), format="yyyy.MM.dd")
-            dt = dt.datetime
+            dt = list(
+                cls.parse(match_anchor.group("anchor"), format="yyyy.MM.dd")
+            )[0].datetime
 
             delta_measure = match_anchor.group("delta_measure")
             delta_unit = match_anchor.group("delta_unit")
@@ -915,12 +1542,36 @@ class Date(Value):
         raise ElasticError("bad round unit")
 
 
+class Text(Value):
+    def __init__(self, value: str, analyzer: analysis.Analyzer) -> None:
+        super().__init__(value)
+        self.index = {
+            word: len(tuple(words))
+            for word, words in itertools.groupby(
+                tuple(analyzer.create_stream(value))
+            )
+        }
+
+    def __iter__(self):
+        yield from self.index.keys()
+
+    @classmethod
+    def parse(cls, body, analyzer: analysis.Analyzer) -> typing.Iterable[Text]:
+        return tuple(
+            cls.parse_single(i, analyzer) for i in utils.walk_json_field(body)
+        )
+
+    @classmethod
+    def parse_single(cls, body, analyzer: analysis.Analyzer) -> Text:
+        return Text(body, analyzer)
+
+
 class Geodistance(Value):
     DISTANCE_PATTERN = re.compile(
         r"^(?P<measure>\d+)(?P<unit>mi|miles|yd|yards|ft|feet|in|inch|km|kilometers|m|meters|cm|centimeters|mm|millimeters|NM|nmi|nauticalmiles)$"
     )
 
-    class Unit(CaseInsensitveEnum):
+    class Unit(utils.CaseInsensitveEnum):
         MILE = "MILE"
         YARD = "YARD"
         FEET = "FEET"
@@ -1010,12 +1661,14 @@ class Geodistance(Value):
 
 
 class Geopoint(Value):
-    class DistanceType(CaseInsensitveEnum):
+    class DistanceType(utils.CaseInsensitveEnum):
         ARC = "ARC"
         PLANE = "PLANE"
 
     def __init__(
-        self, value: typing.Union[str, dict], point: shapely.geometry.Point
+        self,
+        value: typing.Union[str, dict, typing.Sequence[float]],
+        point: shapely.geometry.Point,
     ) -> None:
         super().__init__(value)
         self.point = point
@@ -1029,14 +1682,13 @@ class Geopoint(Value):
                 point2=__o.point.coords[0],
                 unit=haversine.Unit.METERS,
             )
-            return Geodistance(None, measure, Geodistance.Unit.METER)
+            return Geodistance({}, measure, Geodistance.Unit.METER)
         else:
             raise ElasticError("bad distance type")
 
-
     @classmethod
     def parse(cls, body) -> typing.Iterable[Geopoint]:
-        if is_array(body):
+        if utils.is_array(body):
             try:
                 return tuple([cls.parse_array(body)])
             except ParsingException:
@@ -1052,7 +1704,7 @@ class Geopoint(Value):
             return cls.parse_object(body)
         elif isinstance(body, str):
             return cls.parse_string(body)
-        elif is_array(body):
+        elif utils.is_array(body):
             return cls.parse_array(body)
 
         raise ParsingException("geo_point expected")
@@ -1080,7 +1732,7 @@ class Geopoint(Value):
                     raise ElasticError("wkt point expected")
 
                 return Geopoint(body, point)
-        except:
+        except Exception:
             pass
 
         # Try lat,lon
@@ -1096,7 +1748,7 @@ class Geopoint(Value):
             coords = pygeohash.decode(body)
             point = shapely.geometry.Point(*coords)
             return Geopoint(body, point)
-        except:
+        except Exception:
             pass
 
         raise ParsingException(
@@ -1115,7 +1767,7 @@ class Geopoint(Value):
 
 
 class Geoshape(Value):
-    class Orientation(CaseInsensitveEnum):
+    class Orientation(utils.CaseInsensitveEnum):
         RIGHT = "RIGHT"
         LEFT = "LEFT"
 
@@ -1141,7 +1793,7 @@ class Geoshape(Value):
 
     @classmethod
     def parse(cls, body) -> typing.Iterable[Geoshape]:
-        return tuple(cls.parse_single(i) for i in walk_json_field(body))
+        return tuple(cls.parse_single(i) for i in utils.walk_json_field(body))
 
     @classmethod
     def parse_single(cls, body: typing.Union[dict, str]) -> Geoshape:
@@ -1168,21 +1820,55 @@ class Geoshape(Value):
             coords = typing.cast(typing.List[list], body["coordinates"])
             return Geoshape(body, shapely.geometry.Polygon(*coords))
 
+        raise ParsingException("geo_shape expected")
+
 
 class Scripting:
-    def __init__(
-        self, source: str, lang: str, params: dict, exec: typing.Callable
-    ) -> None:
+    def __init__(self, source: str, lang: str, params: dict) -> None:
         self.source = source
         self.lang = lang
         self.params = params
-        self.exec = exec
 
     def execute(self, variables: dict):
         try:
-            self.exec(self.source, { **variables, "params": java_json.loads(json.dumps(self.params)) })
+            if self.lang == "painless":
+                painless.execute(
+                    self.source,
+                    {
+                        **variables,
+                        "params": java_json.loads(json.dumps(self.params)),
+                    },
+                )
+            else:
+                raise NotImplementedError(
+                    f"scripting lang {self.lang} not yet supported"
+                )
         except Exception as e:
-            raise ScriptException("runtime error", e)
+            raise ScriptException("runtime error") from e
+
+    def dumps(self, variables: dict):
+        "Converts python mapping into scripting language mapping"
+        try:
+            if self.lang == "painless":
+                return java_json.loads(json.dumps(variables))
+            else:
+                raise NotImplementedError(
+                    f"scripting lang {self.lang} not yet supported"
+                )
+        except Exception as e:
+            raise ScriptException("casting error") from e
+
+    def loads(self, variables: dict):
+        "Convers from scripting language mapping into python mapping"
+        try:
+            if self.lang == "painless":
+                return json.loads(java_json.dumps(variables))
+            else:
+                raise NotImplementedError(
+                    f"scripting lang {self.lang} not yet supported"
+                )
+        except Exception as e:
+            raise ScriptException("casting error") from e
 
     @classmethod
     def parse(cls, body: typing.Union[str, dict]) -> Scripting:
@@ -1195,114 +1881,38 @@ class Scripting:
 
     @classmethod
     def parse_string(cls, body: str) -> Scripting:
-        return Scripting(body, "PainlessLang", {})
+        return Scripting(body, "painless", {})
 
     @classmethod
     def parse_object(cls, body: dict) -> Scripting:
         body_source = body.get("source", None)
-        body_lang = body.get("lang", "PainlessLang")
+        body_lang = body.get("lang", "painless")
         body_params = body.get("params", {})
 
-        if body_lang == "painless":
-            exec = painless.execute
-        else:
-            raise NotImplementedError(f"lang [{body_lang}] not supported")
-
-        return Scripting(body_source, body_lang, body_params, exec)
-
-
-def infer_dynamic_mapping(
-    source: dict, format: str = "strict_date_optional_time"
-) -> Mappings:
-
-    mappings = Mappings()
-    for k, v in flatten(source):
-
-        while isinstance(v, list):
-            if len(v) == 0:
-                v = None
-            else:
-                v = v[0]
-
-        if v is None:
-            continue
-
-        if isinstance(v, bool):
-            prop = Type({"type": "boolean"})
-        elif isinstance(v, int):
-            prop = Type({"type": "long"})
-        elif isinstance(v, float):
-            prop = Type({"type": "float"})
-        elif isinstance(v, str):
-            if Long.match_pattern(v):
-                prop = Type({"type": "long"})
-            elif Float.match_pattern(v):
-                prop = Type({"type": "float"})
-            elif Date.match_date_format(v, format):
-                prop = Type({"type": "date"})
-            else:
-                prop = Type(
-                    {
-                        "type": "text",
-                        "fields": {
-                            "keyword": {"type": "keyword", "ignore_above": 256}
-                        },
-                    }
-                )
-        elif isinstance(v, dict):
-            prop = Properties()
-        else:
-            raise NotImplementedError(type(v), v)
-
-        mappings.map(k, prop)
-
-    return mappings
-
-
-def map_json_to_value(
-    body: typing.Any, fieldmapping: typing.Union[Properties, Type]
-) -> typing.Iterable[Value]:
-    if body is None:
-        return Null()
-
-    elif "properties" in fieldmapping:
-        return Object()
-
-    else:
-        t = fieldmapping["type"]
-
-        if t == "long":
-            return Long.parse(body)
-        elif t == "float":
-            return Float.parse(body)
-        elif t == "boolean":
-            return Boolean.parse(body)
-        elif t == "keyword":
-            return Keyword.parse(body)
-        elif t == "date":
-            return Date.parse(
-                body, fieldmapping.get("format", "strict_date_optional_time")
-            )
-        elif t == "geo_point":
-            return Geopoint.parse(body)
-        elif t == "geo_shape":
-            return Geoshape.parse(body)
-        else:
-            raise NotImplementedError(t)
+        return Scripting(body_source, body_lang, body_params)
 
 
 def read_from_document(
     fieldname: str, document: Document, _default: typing.Any = MISSING
 ) -> typing.Any:
-    if fieldname in document.__dict__:
-        return _missing_if_empty_array(document.__dict__[fieldname])
-
     try:
-        return _missing_if_empty_array( functools.reduce(
-            dict.get, fieldname.split("."), document._source
-        ))
-    except:
-        return _default
+        if fieldname in document:
+            return _raise_if_missing(
+                _missing_if_empty_array(
+                    utils.get_from_mapping([fieldname], document)
+                )
+            )
+
+        return _raise_if_missing(
+            _missing_if_empty_array(
+                utils.get_from_mapping(
+                    fieldname.split("."), document["_source"]
+                )
+            )
+        )
+    except Exception:
+        return _raise_if_missing(_default)
+
 
 def _missing_if_empty_array(v):
     if isinstance(v, (list, tuple)) and len(v) == 0:
@@ -1311,17 +1921,7 @@ def _missing_if_empty_array(v):
     return v
 
 
-def is_array(v):
-    return isinstance(v, (list, tuple))
-
-
-def walk_json_field(v):
-    if is_array(v):
-        yield from (walk_json_field(i) for i in v)
-    else:
-        yield v
-
-
-def match_numeric_pattern(v):
-    PATTERN = re.compile(r"^\d+(\.\d+)?$")
-    return PATTERN.match(v) is not None
+def _raise_if_missing(v):
+    if v is MISSING:
+        raise KeyError()
+    return v

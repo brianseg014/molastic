@@ -29,9 +29,9 @@ def test_something():
 
 ## Features
 
-- Types supported: Long, Float, Boolean, Keyword, Date, Geopoint, Geoshape
-- Index operations: Create index, Update mapping
+- Types supported: Text, Long, Float, Double, Boolean, Keyword, Date, Geopoint, Geoshape
+- Analyzers: Standard
 - Document APIs: Index, Update, Delete
-- Index APIs: Create index, Update mapping
-- Queries DSL supported: Boolean, MatchAll, Term, Range, Geoshape, Geodistance, 
+- Index APIs: Create index, Delete index, Exists, Update mapping, Get Mapping
+- Queries DSL supported: Boolean, Match, MatchAll, Term, Range, Geoshape, Geodistance, 
 - Scripting: painless (but maps cannot be accessed by dot notation)

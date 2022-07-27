@@ -2,56 +2,38 @@ from __future__ import annotations
 
 import re
 import abc
-import time
 import typing
 
-from .utils import *
-
-from .core import *
-
-
-def count(body: dict, indices: typing.Iterable[Indice]) -> CountResult:
-
-    hits = []
-    for i in indices:
-        query = parse(body, i)
-
-        hits.extend(tuple(query.process(i.documents)))
-
-    return CountResult(
-        count=len(hits),
-        _shards=SearchResult.Shards(
-            total=1, successful=1, skipped=0, failed=0
-        ),
-    )
+from . import core
+from . import utils
 
 
-def search(body: dict, indices: typing.Iterable[Indice]) -> SearchResult:
+class Hit(typing.TypedDict):
+    _index: str
+    _id: str
+    _score: float
+    _source: dict
+    fields: typing.Optional[dict]
 
-    hits = []
-    start_time = time.time()
-    for i in indices:
-        query = parse(body, i)
 
-        hits.extend(tuple(query.process(i.documents)))
-    end_time = time.time()
+def count(body: dict, indices: typing.Iterable[core.Indice]) -> int:
+    return len(search(body, indices))
 
-    max_score = None
-    if len(hits) > 0:
-        max_score = max(h["_score"] for h in hits)
 
-    return SearchResult(
-        took=int(end_time - start_time),
-        timed_out=False,
-        _shards=SearchResult.Shards(
-            total=1, successful=1, skipped=0, failed=0
-        ),
-        hits=SearchResult.Hits(
-            total=SearchResult.Total(value=len(hits), relation="eq"),
-            max_score=max_score,
-            hits=hits,
-        ),
-    )
+def search(
+    body: dict, indices: typing.Iterable[core.Indice]
+) -> typing.Sequence[Hit]:
+    hits: typing.List[Hit] = []
+
+    for indice in indices:
+        hits.extend(run(body, indice))
+
+    return hits
+
+
+def run(body: dict, context: core.Indice) -> typing.Sequence[Hit]:
+    query = parse(body, context)
+    return query.run(context.documents)
 
 
 def parse(body: dict, context):
@@ -69,8 +51,9 @@ def parse_compound_and_leaf_query(
 ) -> typing.Union[CompoundQuery, LeafQuery]:
     query_type = next(iter(body.keys()))
     if len(body) > 1:
-        raise ParsingException(
-            f"[{query_type}] malformed query, expected [END_OBJECT] but found [FIELD_NAME]"
+        raise core.ParsingException(
+            f"[{query_type}] malformed query, expected [END_OBJECT] "
+            "but found [FIELD_NAME]"
         )
 
     if query_type == "match_all":
@@ -91,52 +74,13 @@ def parse_compound_and_leaf_query(
     if query_type == "geo_shape":
         return GeoshapeQuery.parse(body[query_type], context)
 
+    if query_type == "match":
+        return MatchQuery.parse(body[query_type], context)
+
     raise Exception("unknown query type", query_type)
 
 
-@dataclasses.dataclass(frozen=True)
-class SearchResult:
-    class Shards(typing.TypedDict):
-        total: int
-        successful: int
-        skipped: int
-        failed: int
-
-    class Total(typing.TypedDict):
-        value: int
-        relation: str
-
-    class Hit(typing.TypedDict):
-        _index: str
-        _type: str
-        _id: str
-        _score: float
-        _source: dict
-
-    class Hits(typing.TypedDict):
-        total: SearchResult.Total
-        max_score: int
-        hits: typing.Sequence[SearchResult.Hit]
-
-    took: int
-    timed_out: bool
-    _shards: Shards
-    hits: Hits
-
-
-@dataclasses.dataclass(frozen=True)
-class CountResult:
-    class Shards(typing.TypedDict):
-        total: int
-        successful: int
-        skipped: int
-        failed: int
-
-    count: int
-    _shards: CountResult.Shards
-
-
-class QueryShardException(ElasticError):
+class QueryShardException(core.ElasticError):
     pass
 
 
@@ -144,19 +88,19 @@ class QueryDSL:
     def __init__(self, query: SimpleQuery) -> None:
         self.query = query
 
-    def process(
-        self, documents: typing.Iterable[Document]
-    ) -> typing.Iterable[SearchResult.Hit]:
+    def run(
+        self, documents: typing.Iterable[core.Document]
+    ) -> typing.Iterable[Hit]:
 
-        hits = list(d for d in documents if self.query.match(d))
+        hits = tuple(d for d in documents if self.query.match(d))
 
         return (
-            SearchResult.Hit(
-                _index=d._index._id,
-                _type=d._type,
-                _id=d._id,
+            Hit(
+                _index=d["_index"]._id,
+                _id=d["_id"],
                 _score=0.0,
-                _source=d._source,
+                _source=d["_source"],
+                fields=None,
             )
             for d in hits
         )
@@ -164,11 +108,11 @@ class QueryDSL:
 
 class Query(abc.ABC):
     @abc.abstractmethod
-    def score(self, document: Document) -> float:
+    def score(self, document: core.Document) -> float:
         pass
 
     @abc.abstractmethod
-    def match(self, document: Document) -> bool:
+    def match(self, document: core.Document) -> bool:
         pass
 
 
@@ -177,15 +121,24 @@ class SimpleQuery(Query):
         super().__init__()
         self.query = query
 
-    def score(self, document: Document) -> float:
+    def score(self, document: core.Document) -> float:
         return 1.0
 
-    def match(self, document: Document) -> bool:
+    def match(self, document: core.Document) -> bool:
         return self.query.match(document)
+
+
+class LeafQuery(Query):
+    pass
 
 
 class CompoundQuery(Query):
     pass
+
+
+BoolOccurType = typing.Optional[
+    typing.Sequence[typing.Union[CompoundQuery, LeafQuery]]
+]
 
 
 class BooleanQuery(CompoundQuery):
@@ -204,7 +157,7 @@ class BooleanQuery(CompoundQuery):
 
             interger_match = (
                 BooleanQuery.MinimumShouldMatch.INTEGER_PATTERN.match(
-                    self.param
+                    str(self.param)
                 )
             )
             if interger_match is not None:
@@ -214,15 +167,14 @@ class BooleanQuery(CompoundQuery):
 
             negative_integer_match = (
                 BooleanQuery.MinimumShouldMatch.NEGATIVE_INTEGER_PATTERN.match(
-                    self.param
+                    str(self.param)
                 )
             )
             if negative_integer_match is not None:
                 # Total minus param should be mandatory
                 value = int(negative_integer_match.group("value"))
                 return (
-                    optional_clauses_matched
-                    >= self.total_optional_cluases - value
+                    optional_clauses_matched >= total_optional_clauses - value
                 )
 
             raise NotImplementedError(
@@ -231,23 +183,34 @@ class BooleanQuery(CompoundQuery):
 
     def __init__(
         self,
-        must: typing.Sequence[CompoundQuery, LeafQuery],
-        filter: typing.Sequence[CompoundQuery, LeafQuery],
-        should: typing.Sequence[CompoundQuery, LeafQuery],
-        must_not: typing.Sequence[CompoundQuery, LeafQuery],
-        minimum_should_match: MinimumShouldMatch,
+        must: BoolOccurType = None,
+        filter: BoolOccurType = None,
+        should: BoolOccurType = None,
+        must_not: BoolOccurType = None,
+        minimum_should_match: typing.Optional[MinimumShouldMatch] = None,
         boost: float = 1.0,
     ) -> None:
-        self.must = must
-        self.filter = filter
-        self.should = should
-        self.must_not = must_not
-        self.minimum_should_match = minimum_should_match
+        self.must = must or []
+        self.filter = filter or []
+        self.should = should or []
+        self.must_not = must_not or []
 
-    def score(self, document: Document) -> float:
+        if minimum_should_match is None:
+            if (
+                len(self.should) >= 1
+                and len(self.must) == 0
+                and len(self.filter) == 0
+            ):
+                self.minimum_should_match = BooleanQuery.MinimumShouldMatch(1)
+            else:
+                self.minimum_should_match = BooleanQuery.MinimumShouldMatch(0)
+        else:
+            self.minimum_should_match = minimum_should_match
+
+    def score(self, document: core.Document) -> float:
         return 1.0
 
-    def match(self, document: Document) -> bool:
+    def match(self, document: core.Document) -> bool:
         must = sum(1 for q in self.must if q.match(document))
         filter = sum(1 for q in self.filter if q.match(document))
         should = sum(1 for q in self.should if q.match(document))
@@ -264,7 +227,25 @@ class BooleanQuery(CompoundQuery):
         return matched
 
     @classmethod
-    def parse(self, body: dict, context: Indice) -> BooleanQuery:
+    def parse(self, body: dict, context: core.Indice) -> BooleanQuery:
+        not_recognized = {
+            k: v
+            for k, v in body.items()
+            if k
+            not in [
+                "must",
+                "filter",
+                "should",
+                "must_not",
+                "minimum_should_match",
+            ]
+        }
+        if len(not_recognized) > 0:
+            first_param = list(not_recognized)[0]
+            raise core.ParsingException(
+                f"query does not support [{first_param}]"
+            )
+
         must_body = body.get("must", [])
         filter_body = body.get("filter", [])
         should_body = body.get("should", [])
@@ -285,14 +266,7 @@ class BooleanQuery(CompoundQuery):
                 str(minimum_should_match_body)
             )
         else:
-            if (
-                len(must_body) == 0
-                and len(filter_body) == 0
-                and len(should_body) >= 1
-            ):
-                minimum_should_match = BooleanQuery.MinimumShouldMatch("1")
-            else:
-                minimum_should_match = BooleanQuery.MinimumShouldMatch("0")
+            minimum_should_match = None
 
         return BooleanQuery(
             must=tuple(
@@ -320,15 +294,11 @@ class BooleanQuery(CompoundQuery):
         )
 
 
-class LeafQuery(Query):
-    pass
-
-
 class MatchAllQuery(LeafQuery):
-    def score(self, document: Document) -> float:
+    def score(self, document: core.Document) -> float:
         return 0.0
 
-    def match(self, _: Document) -> bool:
+    def match(self, _: core.Document) -> bool:
         return True
 
 
@@ -336,81 +306,91 @@ class TermQuery(LeafQuery):
     def __init__(
         self,
         fieldname: str,
-        fieldmapping: Type,
-        lookup_value: Value,
+        fieldmapper: core.Mapper,
+        lookup_value: core.Value,
         boost: float = 1.0,
         case_insensitive: bool = False,
     ) -> None:
         super().__init__()
         self.fieldname = fieldname
-        self.fieldmapping = fieldmapping
+        self.fieldmapper = fieldmapper
         self.lookup_value = lookup_value
         self.boost = boost
         self.case_insensitive = case_insensitive
 
-    def score(self, document: Document) -> float:
+    def score(self, document: core.Document) -> float:
         return 1.0
 
-    def match(self, document: Document) -> bool:
-        stored_body = read_from_document(self.fieldname, document, MISSING)
-        if stored_body is MISSING:
+    def match(self, document: core.Document) -> bool:
+        stored_body = core.read_from_document(self.fieldname, document, None)
+        if stored_body is None:
             return False
 
-        for stored_value in map_json_to_value(stored_body, self.fieldmapping):
+        for stored_value in self.fieldmapper.map(stored_body):
             if stored_value == self.lookup_value:
                 return True
-        
+
         return False
 
     @classmethod
-    def parse(cls, body: dict, context: Indice) -> TermQuery:
+    def parse(cls, body: dict, context: core.Indice) -> TermQuery:
         if isinstance(body, dict):
             return cls.parse_object(body, context)
 
-        raise ParsingException(
+        raise core.ParsingException(
             "[term] query malformed, no start_object after query name"
         )
 
     @classmethod
-    def parse_object(cls, body: dict, context: Indice) -> TermQuery:
+    def parse_object(cls, body: dict, context: core.Indice) -> TermQuery:
         body_fields = {k: v for k, v in body.items()}
 
         if len(body_fields) > 1:
             field1, field2 = list(body_fields)[0:2]
-            raise ParsingException(
+            raise core.ParsingException(
                 "[term] query doesn't support multiple fields, "
                 f"found [{field1}] and [{field2}]"
             )
 
         if len(body_fields) == 0:
-            raise IllegalArgumentException(
+            raise core.IllegalArgumentException(
                 "fieldName must not be null or empty"
             )
 
         fieldname, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapping = context.mappings.get(fieldname)
+        fieldmapper = context.mappers.get(fieldname)
 
         if isinstance(body_fieldprops, str):
-            lookup_value = map_json_to_value(body_fieldprops, fieldmapping)[0]
-            return TermQuery(fieldname, fieldmapping, lookup_value)
+            lookup_values = fieldmapper.map(body_fieldprops)
+            return TermQuery(fieldname, fieldmapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, dict):
             body_value = body_fieldprops.get("value", None)
             if body_value is None:
-                raise IllegalArgumentException("value cannot be null")
+                raise core.IllegalArgumentException("value cannot be null")
 
-            lookup_value = map_json_to_value(body_value, fieldmapping)[0]
-            return TermQuery(fieldname, fieldmapping, lookup_value)
+            lookup_values = fieldmapper.map(body_fieldprops)
+            return TermQuery(fieldname, fieldmapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, list):
-            raise ParsingException(
+            raise core.ParsingException(
                 "[term] query does not support array of values"
             )
 
+        else:
+            raise core.ParsingException(
+                "[term] query does not support long, float, boolean"
+            )
+
+
+RangeQueryValue = typing.Optional[
+    typing.Union[core.Long, core.Float, core.Double, core.Date]
+]
+
 
 class RangeQuery(LeafQuery):
-    class Relation(CaseInsensitveEnum):
+    class Relation(utils.CaseInsensitveEnum):
         INTERSECTS = "INTERSECTS"
         CONTAINS = "CONTAINS"
         WITHIN = "WITHIN"
@@ -418,16 +398,21 @@ class RangeQuery(LeafQuery):
     def __init__(
         self,
         fieldname: str,
-        fieldmapping: Type,
-        gte: typing.Optional[Value] = None,
-        gt: typing.Optional[Value] = None,
-        lt: typing.Optional[Value] = None,
-        lte: typing.Optional[Value] = None,
+        fieldmapper: typing.Union[
+            core.LongMapper,
+            core.FloatMapper,
+            core.DoubleMapper,
+            core.DateMapper,
+        ],
+        gte: RangeQueryValue = None,
+        gt: RangeQueryValue = None,
+        lt: RangeQueryValue = None,
+        lte: RangeQueryValue = None,
         relation: Relation = Relation.INTERSECTS,
         boost: float = 1.0,
     ) -> None:
         self.fieldname = fieldname
-        self.fieldmapping = fieldmapping
+        self.fieldmapper = fieldmapper
         self.gte = gte
         self.gt = gt
         self.lt = lt
@@ -435,25 +420,25 @@ class RangeQuery(LeafQuery):
         self.relation = relation
         self.boost = boost
 
-    def score(self, document: Document) -> float:
+    def score(self, document: core.Document) -> float:
         return 1.0
 
-    def match(self, document: Document) -> bool:
-        stored_body = read_from_document(self.fieldname, document, MISSING)
-        if stored_body is MISSING:
+    def match(self, document: core.Document) -> bool:
+        stored_body = core.read_from_document(self.fieldname, document, None)
+        if stored_body is None:
             return False
 
-        for stored_value in map_json_to_value(stored_body, self.fieldmapping):
+        for stored_value in self.fieldmapper.map(stored_body):
 
             satisfied = True
             if self.gte is not None:
-                satisfied = satisfied and stored_value >= self.gte
+                satisfied = satisfied and stored_value >= self.gte  # type: ignore
             if self.gt is not None:
-                satisfied = satisfied and stored_value > self.gt
+                satisfied = satisfied and stored_value > self.gt  # type: ignore
             if self.lte is not None:
-                satisfied = satisfied and stored_value <= self.lte
+                satisfied = satisfied and stored_value <= self.lte  # type: ignore
             if self.lt is not None:
-                satisfied = satisfied and stored_value < self.lt
+                satisfied = satisfied and stored_value < self.lt  # type: ignore
 
             if satisfied:
                 return True
@@ -461,7 +446,7 @@ class RangeQuery(LeafQuery):
         return False
 
     @classmethod
-    def parse(cls, body: dict, context: Indice) -> RangeQuery:
+    def parse(cls, body: dict, context: core.Indice) -> RangeQuery:
         body_fields = {k: v for k, v in body.items() if isinstance(v, dict)}
         body_params = {
             k: v for k, v in body.items() if not isinstance(v, dict)
@@ -469,32 +454,34 @@ class RangeQuery(LeafQuery):
 
         if len(body_fields) > 1:
             field1, field2 = list(body_fields)[0:2]
-            raise ParsingException(
+            raise core.ParsingException(
                 "[range] query doesn't support multiple fields, "
                 f"found [{field1}] and [{field2}]"
             )
 
         if len(body_params) > 1:
             first_param = list(body_params)[0]
-            raise ParsingException(f"query does not support [{first_param}]")
+            raise core.ParsingException(
+                f"query does not support [{first_param}]"
+            )
 
         if len(body_fields) == 0:
-            raise IllegalArgumentException(
+            raise core.IllegalArgumentException(
                 "fieldName must not be null or empty"
             )
 
         fieldname, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapping = context.mappings.get(fieldname)
-        fieldmapping_type = fieldmapping["type"]
-        if fieldmapping_type not in [
+        fieldmapper = context.mappers.get(fieldname)
+
+        if fieldmapper.type not in [
             "long",
             "float",
             "boolean",
             "date",
         ]:
             raise QueryShardException(
-                f"Field [{fieldname}] is of unsupported type [{fieldmapping_type}] for [range] query"
+                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [range] query"
             )
 
         body_gte = body_fieldprops.get("gte", None)
@@ -502,39 +489,52 @@ class RangeQuery(LeafQuery):
         body_lte = body_fieldprops.get("lte", None)
         body_lt = body_fieldprops.get("lt", None)
 
-        gte, gt, lt, lte = None, None, None, None
-        if fieldmapping_type == "date":
-            body_format = body_fieldprops.get("format", fieldmapping["format"])
+        gte: RangeQueryValue = None
+        gt: RangeQueryValue = None
+        lt: RangeQueryValue = None
+        lte: RangeQueryValue = None
+        if fieldmapper.type == "date":
+            assert isinstance(fieldmapper, core.DateMapper)
+
+            body_format = body_fieldprops.get("format", fieldmapper.format)
             if isinstance(body_gte, str):
-                if Date.match_date_math_pattern(body_gte):
-                    gte = Date.parse_date_math(body_gte)
+                if core.Date.match_date_math_pattern(body_gte):
+                    gte = core.Date.parse_date_math(body_gte)
                 else:
-                    gte = Date.parse_single(body_gte, body_format)
+                    gte = core.Date.parse_single(body_gte, body_format)
             if isinstance(body_gt, str):
-                if Date.match_date_math_pattern(body_gt):
-                    gt = Date.parse_date_math(body_gt)
+                if core.Date.match_date_math_pattern(body_gt):
+                    gt = core.Date.parse_date_math(body_gt)
                 else:
-                    gt = Date.parse_single(body_gt, body_format)
+                    gt = core.Date.parse_single(body_gt, body_format)
             if isinstance(body_lte, str):
-                if Date.match_date_math_pattern(body_lte):
-                    lte = Date.parse_date_math(body_lte)
+                if core.Date.match_date_math_pattern(body_lte):
+                    lte = core.Date.parse_date_math(body_lte)
                 else:
-                    lte = Date.parse_single(lte, body_format)
+                    lte = core.Date.parse_single(body_lte, body_format)
             if isinstance(body_lt, str):
-                if Date.match_date_math_pattern(body_lt):
-                    lt = Date.parse_date_math(body_lt)
+                if core.Date.match_date_math_pattern(body_lt):
+                    lt = core.Date.parse_date_math(body_lt)
                 else:
-                    lt = Date.parse_single(body_lt, body_format)
+                    lt = core.Date.parse_single(body_lt, body_format)
 
-        else: # No date
+        else:  # No date
+            assert isinstance(
+                fieldmapper,
+                (core.LongMapper, core.FloatMapper, core.DoubleMapper),
+            )
 
-            parser = None
-            if fieldmapping_type == "long":
-                parser = Long.parse_single
-            elif fieldmapping_type == "float":
-                parser = Float.parse_single
+            parser: typing.Callable[
+                [typing.Any], typing.Union[core.Long, core.Float, core.Double]
+            ]
+            if fieldmapper.type == "long":
+                parser = core.Long.parse_single
+            elif fieldmapper.type == "float":
+                parser = core.Float.parse_single
+            elif fieldmapper.type == "double":
+                parser = core.Double.parse_single
             else:
-                raise NotImplementedError(fieldmapping_type)
+                raise NotImplementedError(fieldmapper.type)
 
             if body_gte is not None and gte is None:
                 gte = parser(body_gte)
@@ -545,44 +545,46 @@ class RangeQuery(LeafQuery):
             if body_lt is not None and lt is None:
                 lte = parser(body_lte)
 
-        return RangeQuery(fieldname, fieldmapping, gte, gt, lt, lte)
+        return RangeQuery(fieldname, fieldmapper, gte, gt, lt, lte)
 
 
 class GeoshapeQuery(LeafQuery):
-    class Relation(CaseInsensitveEnum):
+    class Relation(utils.CaseInsensitveEnum):
         INTERSECTS = "INTERSECTS"
         CONTAINS = "CONTAINS"
 
     def __init__(
         self,
         fieldname: str,
-        fieldmapping: Type,
-        shape: Geoshape,
+        fieldmapper: core.GeoshapeMapper,
+        shape: core.Geoshape,
         relation: Relation,
     ) -> None:
         super().__init__()
         self.fieldname = fieldname
-        self.fieldmapping = fieldmapping
+        self.fieldmapper = fieldmapper
         self.shape = shape
         self.relation = relation
 
-    def score(self, document: Document) -> float:
+    def score(self, document: core.Document) -> float:
         return 1.0
 
-    def match(self, document: Document) -> bool:
-        stored_body = read_from_document(self.fieldname, document, MISSING)
-        if stored_body is MISSING:
+    def match(self, document: core.Document) -> bool:
+        stored_body = core.read_from_document(self.fieldname, document, None)
+        if stored_body is None:
             return False
 
-        for stored_value in map_json_to_value(stored_body, self.fieldmapping):
-            stored_value = typing.cast(Geoshape, stored_value)
+        for stored_value in self.fieldmapper.map(stored_body):
+            stored_value = typing.cast(core.Geoshape, stored_value)
 
             if self.relation == GeoshapeQuery.Relation.INTERSECTS:
                 satisfied = stored_value.intersects(self.shape)
             elif self.relation == GeoshapeQuery.Relation.CONTAINS:
                 satisfied = stored_value.contains(self.shape)
             else:
-                raise NotImplementedError(f"GeoshapeQuery with relation [{self.relation}]")
+                raise NotImplementedError(
+                    f"GeoshapeQuery with relation [{self.relation}]"
+                )
 
             if satisfied:
                 return True
@@ -590,7 +592,7 @@ class GeoshapeQuery(LeafQuery):
         return False
 
     @classmethod
-    def parse(self, body: dict, context: Indice) -> GeoshapeQuery:
+    def parse(self, body: dict, context: core.Indice) -> GeoshapeQuery:
         body_fields = {k: v for k, v in body.items() if isinstance(v, dict)}
         body_params = {
             k: v for k, v in body.items() if not isinstance(v, dict)
@@ -598,34 +600,36 @@ class GeoshapeQuery(LeafQuery):
 
         if len(body_fields) > 1:
             field1, field2 = list(body_fields)[0:2]
-            raise ParsingException(
+            raise core.ParsingException(
                 "[range] query doesn't support multiple fields, "
                 f"found [{field1}] and [{field2}]"
             )
 
         if len(body_params) > 0:
             first_param = list(body_params)[0]
-            raise ParsingException(f"query does not support [{first_param}]")
+            raise core.ParsingException(
+                f"query does not support [{first_param}]"
+            )
 
         if len(body_fields) == 0:
-            raise IllegalArgumentException(
+            raise core.IllegalArgumentException(
                 "fieldName must not be null or empty"
             )
 
         fieldname, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapping = context.mappings.get(fieldname)
-        fieldmapping_type = fieldmapping["type"]
-        if fieldmapping_type not in ["geo_shape"]:
+        fieldmapper = context.mappers.get(fieldname)
+
+        if fieldmapper.type not in ["geo_shape"]:
             raise QueryShardException(
-                f"Field [{fieldname}] is of unsupported type [{fieldmapping_type}] for [geo_shape] query"
+                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [geo_shape] query"
             )
 
         if (
             "shape" not in body_fieldprops
             and "indexedShapeId" not in body_fieldprops
         ):
-            raise IllegalArgumentException(
+            raise core.IllegalArgumentException(
                 "either shape or indexShapedId is required"
             )
 
@@ -634,39 +638,44 @@ class GeoshapeQuery(LeafQuery):
                 "relation", GeoshapeQuery.Relation.INTERSECTS.value
             )
 
-            shape = Geoshape.parse_single(body_fieldprops["shape"])
+            shape = core.Geoshape.parse_single(body_fieldprops["shape"])
             relation = GeoshapeQuery.Relation(body_relation)
 
-            return GeoshapeQuery(fieldname, fieldmapping, shape, relation)
+            assert isinstance(fieldmapper, core.GeoshapeMapper)
+            return GeoshapeQuery(fieldname, fieldmapper, shape, relation)
         elif "indexedShapeId" in body_fieldprops:
             raise NotImplementedError("indexedShapeId")
+        else:
+            raise core.ParsingException(
+                "[Geoshape] query does not support inputs"
+            )
 
 
 class GeodistanceQuery(LeafQuery):
     def __init__(
         self,
         fieldname: str,
-        fieldmapping: Type,
-        distance: Geodistance,
-        value: typing.Union[Geopoint, Geoshape],
-        distance_type: Geopoint.DistanceType,
+        fieldmapper: core.GeopointMapper,
+        distance: core.Geodistance,
+        value: core.Geopoint,
+        distance_type: core.Geopoint.DistanceType,
     ) -> None:
         super().__init__()
         self.fieldname = fieldname
-        self.fieldmapping = fieldmapping
+        self.fieldmapper = fieldmapper
         self.distance = distance
         self.value = value
         self.distance_type = distance_type
 
-    def score(self, document: Document) -> float:
+    def score(self, document: core.Document) -> float:
         return 1.0
 
-    def match(self, document: Document) -> bool:
-        stored_body = read_from_document(self.fieldname, document, MISSING)
-        if stored_body is MISSING:
+    def match(self, document: core.Document) -> bool:
+        stored_body = core.read_from_document(self.fieldname, document, None)
+        if stored_body is None:
             return False
 
-        for stored_value in Geopoint.parse(stored_body):
+        for stored_value in self.fieldmapper.map(stored_body):
             distance = stored_value.distance(self.value, self.distance_type)
             if distance <= self.distance:
                 return True
@@ -674,7 +683,7 @@ class GeodistanceQuery(LeafQuery):
         return False
 
     @classmethod
-    def parse(cls, body: dict, context: Indice) -> GeodistanceQuery:
+    def parse(cls, body: dict, context: core.Indice) -> GeodistanceQuery:
         body_fields = {
             k: v
             for k, v in body.items()
@@ -689,34 +698,167 @@ class GeodistanceQuery(LeafQuery):
 
         if len(body_fields) > 1:
             field1, field2 = list(body_fields)[0:2]
-            raise ParsingException(
+            raise core.ParsingException(
                 "[range] query doesn't support multiple fields, "
                 f"found [{field1}] and [{field2}]"
             )
 
         if len(body_fields) == 0:
-            raise IllegalArgumentException(
+            raise core.IllegalArgumentException(
                 "fieldName must not be null or empty"
             )
 
         fieldname, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapping = context.mappings.get(fieldname)
-        fieldmapping_type = fieldmapping["type"]
-        if fieldmapping_type not in ["geo_point"]:
+        fieldmapper = context.mappers.get(fieldname)
+
+        if fieldmapper.type not in ["geo_point"]:
             raise QueryShardException(
-                f"Field [{fieldname}] is of unsupported type [{fieldmapping_type}] for [geo_shape] query"
+                f"Field [{fieldname}] is of unsupported type "
+                f"[{fieldmapper.type}] for [geo_shape] query"
             )
 
         body_distance = body_params["distance"]
         body_distance_type = body_params.get(
-            "distance_type", Geopoint.DistanceType.ARC.value
+            "distance_type", core.Geopoint.DistanceType.ARC.value
         )
 
-        distance = Geodistance.parse_single(body_distance)
-        distance_type = Geopoint.DistanceType[body_distance_type]
-        point = Geopoint.parse_single(body_fieldprops)
+        distance = core.Geodistance.parse_single(body_distance)
+        distance_type = core.Geopoint.DistanceType[body_distance_type]
+        point = core.Geopoint.parse_single(body_fieldprops)
 
+        assert isinstance(fieldmapper, core.GeopointMapper)
         return GeodistanceQuery(
-            fieldname, fieldmapping, distance, point, distance_type
+            fieldname, fieldmapper, distance, point, distance_type
         )
+
+
+class MatchQuery(LeafQuery):
+    class MatchWordQuery(LeafQuery):
+        def __init__(
+            self,
+            fieldname: str,
+            fieldmapper: core.TextMapper,
+            lookup_word: str,
+        ) -> None:
+            super().__init__()
+            self.fieldname = fieldname
+            self.fieldmapper = fieldmapper
+            self.lookup_word = lookup_word
+
+        def score(self, document: core.Document) -> float:
+            return 1.0
+
+        def match(self, document: core.Document) -> bool:
+            stored_body = core.read_from_document(
+                self.fieldname, document, None
+            )
+            if stored_body is None:
+                return False
+
+            for stored_value in self.fieldmapper.map(stored_body):
+                assert isinstance(stored_value, core.Text)
+                if self.lookup_word in stored_value:
+                    return True
+
+            return False
+
+    def __init__(
+        self,
+        fieldname: str,
+        fieldmapper: core.TextMapper,
+        lookup_value: core.Text,
+    ) -> None:
+        super().__init__()
+        self.fieldname = fieldname
+        self.fieldmapper = fieldmapper
+        self.lookup_value = lookup_value
+
+        self.bool_query = BooleanQuery(
+            should=[
+                MatchQuery.MatchWordQuery(self.fieldname, self.fieldmapper, w)
+                for w in self.lookup_value
+            ]
+        )
+
+    def score(self, document: core.Document) -> float:
+        return self.bool_query.score(document)
+
+    def match(self, document: core.Document) -> bool:
+        return self.bool_query.match(document)
+
+    @classmethod
+    def parse(cls, body: dict, context: core.Indice) -> MatchQuery:
+        body_fields = {k: v for k, v in body.items()}
+
+        if len(body_fields) == 0:
+            raise core.IllegalArgumentException(
+                "fieldName must not be null or empty"
+            )
+
+        if len(body_fields) > 1:
+            field1, field2 = list(body_fields)[0:2]
+            raise core.ParsingException(
+                "[match] query doesn't support multiple fields, "
+                f"found [{field1}] and [{field2}]"
+            )
+
+        fieldname, body_fieldprops = next(iter(body_fields.items()))
+
+        fieldmapper = context.mappers.get(fieldname)
+
+        if fieldmapper.type not in ["text"]:
+            raise QueryShardException(
+                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [match] query"
+            )
+
+        assert isinstance(fieldmapper, core.TextMapper)
+
+        if isinstance(body_fieldprops, str):
+            lookup_values = fieldmapper.map(body_fieldprops)
+            return MatchQuery(
+                fieldname, fieldmapper, next(iter(lookup_values))
+            )
+
+        elif isinstance(body_fieldprops, dict):
+            body_fieldprops_unrecognized = {
+                k: v
+                for k, v in body_fieldprops.items()
+                if k
+                not in [
+                    "query",
+                    "analyzer",
+                    "auto_generate_synonyms_phrase_query",
+                    "fuzziness",
+                    "max_expansions",
+                    "prefix_length",
+                    "fuzzy_transpositions",
+                    "fuzzy_rewrite",
+                    "lenient",
+                    "operator",
+                    "minimum_should_match",
+                    "zero_terms_query",
+                ]
+            }
+
+            if len(body_fieldprops_unrecognized) > 0:
+                first_param = list(body_fieldprops_unrecognized)[0]
+                raise core.ParsingException(
+                    f"query does not support [{first_param}]"
+                )
+
+            lookup_values = fieldmapper.map(body_fieldprops["query"])
+
+            return MatchQuery(
+                fieldname, fieldmapper, next(iter(lookup_values))
+            )
+
+        elif isinstance(body_fieldprops, list):
+            raise core.ParsingException(
+                "[match] query does not support array of values"
+            )
+
+        else:
+            raise core.ParsingException(
+                "[match] query does not support long, float, boolean"
+            )

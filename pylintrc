@@ -1,0 +1,6 @@
+[MASTER]
+ignore-patterns=.*parsetab.*
+disable=
+      missing-module-docstring,
+      missing-class-docstring,
+      missing-function-docstring

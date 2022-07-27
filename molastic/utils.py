@@ -1,6 +1,10 @@
+import contextlib
 import re
 import enum
+import time
 import typing
+import functools
+import collections.abc
 import deepmerge
 
 
@@ -9,14 +13,21 @@ source_merger = deepmerge.Merger([], ["override"], ["override"])
 
 class CaseInsensitveEnum(enum.Enum):
     @classmethod
-    def _missing_(cls, value: str):
+    def _missing_(cls, value: object) -> typing.Any:
+        assert isinstance(value, str)
+
         for member in cls:
             if member.value == value.upper():
                 return member
 
 
+def match_numeric_pattern(v):
+    PATTERN = re.compile(r"^\d+(\.\d+)?$")
+    return PATTERN.match(v) is not None
+
+
 def flatten(
-    value: dict,
+    value: collections.abc.Mapping,
 ) -> typing.Generator[typing.Tuple[str, typing.Any], None, None]:
     "Generate key,value pairs flatting a deep dict"
 
@@ -26,12 +37,14 @@ def flatten(
         else:
             return key
 
-    def _flatten(value: dict, keys: typing.Sequence[str]):
+    def _flatten(value: collections.abc.Mapping, keys: typing.List[str]):
         for k, v in value.items():
-            if isinstance(v, dict):
+            if isinstance(v, collections.abc.Mapping):
                 yield _keymap(keys, k), v
                 yield from _flatten(v, keys + [k])
-            elif isinstance(v, list):
+            elif not isinstance(v, str) and isinstance(
+                v, collections.abc.Sequence
+            ):
                 if len(v) == 0:
                     continue
                 yield _keymap(keys, k), v[0]
@@ -39,6 +52,21 @@ def flatten(
                 yield _keymap(keys, k), v
 
     yield from _flatten(value, [])
+
+
+def is_array(v):
+    return not isinstance(v, str) and isinstance(v, collections.abc.Sequence)
+
+
+def walk_json_field(v):
+    if is_array(v):
+        yield from (walk_json_field(i) for i in v)
+    else:
+        yield v
+
+
+def get_from_mapping(segments: typing.Iterable[str], mapping: typing.Mapping):
+    return functools.reduce(collections.abc.Mapping.get, segments, mapping)
 
 
 def transpose_date_format(format: str) -> str:
@@ -62,3 +90,9 @@ def transpose_date_format(format: str) -> str:
         format = re.sub(java_format, python_format, format)
 
     return format.replace("'", "" "" "").replace('"', "")
+
+
+@contextlib.contextmanager
+def timer():
+    start = time.time() * 1000
+    yield lambda: time.time() * 1000 - start

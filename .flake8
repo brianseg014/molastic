@@ -1,0 +1,2 @@
+[flake8]
+exclude=molastic/painless_parsetab.py

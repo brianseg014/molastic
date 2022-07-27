@@ -1,13 +1,19 @@
+from __future__ import annotations
+
 import re
 import json
-import dataclasses
-import furl
+import typing
 import requests
 import requests_mock
 
 from . import core
-from . import query_dsl
 from . import utils
+
+from .api.api_interface import RequestHandler
+
+from .api import document
+from .api import index
+from .api import search
 
 
 class JSONEncoder(json.JSONEncoder):
@@ -25,8 +31,22 @@ class ElasticApiMock:
         self.mocker.register_uri(
             method=requests_mock.ANY,
             url=re.compile(f"^{endpoint}.*$"),
-            text=self.handle_request,
+            text=self.handle_request,  # type: ignore
         )
+
+        self.handlers: typing.Sequence[RequestHandler] = [
+            document.AddOrOverwriteDocumentHandler(self.engine),
+            document.AddDocumentHandler(self.engine),
+            document.UpdateDocumentHandler(self.engine),
+            document.DeleteDocumentHandler(self.engine),
+            index.CreateIndexHandler(self.engine),
+            index.DeleteIndexHandler(self.engine),
+            index.ExistsHandler(self.engine),
+            index.UpdateMappingHandler(self.engine),
+            index.GetMappingHandler(self.engine),
+            search.SearchHandler(self.engine),
+            search.CountHandler(self.engine),
+        ]
 
     def start(self) -> None:
         self.mocker.start()
@@ -36,129 +56,21 @@ class ElasticApiMock:
 
     def handle_request(
         self, request: requests.PreparedRequest, context
-    ) -> str:
-        f = furl.furl(request.url)
+    ) -> typing.Optional[str]:
+        handlers = [h for h in self.handlers if h.can_handle(request)]
 
-        # Add matches for reserved paths
-
-        # PUT /<target>
-        if request.method == "PUT" and len(f.path.segments) == 1:
-            target = f.path.segments[0]
-            body = json.loads(request.body)
-
-            result = self.engine.indice(target, create=True).config(body)
-            return self.serialize_for_response(result)
-
-        # PUT /<target>/_mapping
-        if (
-            request.method == "PUT"
-            and len(f.path.segments) == 2
-            and f.path.segments[1] == "_mapping"
-        ):
-            target = f.path.segments[0]
-            body = json.loads(request.body)
-
-            result = self.engine.indice(target).config_mappings(body)
-            return self.serialize_for_response(result)
-
-        # Index API
-        # PUT /<target>/_doc/<_id>
-        if (
-            request.method == "PUT"
-            and len(f.path.segments) == 3
-            and f.path.segments[1] == "_doc"
-        ):
-            target = f.path.segments[0]
-            body = json.loads(request.body)
-            id = f.path.segments[2]
-            op_type = core.OperationType.INDEX
-
-            result = self.engine.indice(target, create=True).index(
-                body=body, id=id, op_type=op_type
+        if len(handlers) == 0:
+            context.status_code = 405
+            return json.dumps(
+                {
+                    "error": (
+                        f"Incorrect HTTP method for uri [{request.url}] "
+                        f"and method [{request.method}]"
+                    )
+                }
             )
-            return self.serialize_for_response(result)
 
-        # POST /<target>/_doc/
-        if (
-            request.method == "POST"
-            and len(f.path.segments) == 2
-            and f.path.segments[1] == "_doc"
-        ):
-            target = f.path.segments[0]
-            body = json.loads(request.body)
+        if len(handlers) > 1:
+            raise Exception("single handler should match")
 
-            result = self.engine.indice(target, create=True).index(body=body)
-            return self.serialize_for_response(result)
-
-        # PUT /<target>/_create/<_id>
-        # if request.method == "PUT" and f.path.segments[1] == "_create":
-        #     if len(f.path.segments) < 3:
-        #         raise ElasticError("_id is required")
-        #     return
-
-        # POST /<target>/_create/<_id>
-        # if request.method == "POST" and f.path.segments[1] == "_create":
-        #     if len(f.path.segments) < 3:
-        #         raise ElasticError("_id is required")
-        #     return
-
-        # POST /<index>/_update/<_id>
-        if (
-            request.method == "POST"
-            and len(f.path.segments) == 3
-            and f.path.segments[1] == "_update"
-        ):
-            target = f.path.segments[0]
-            body = json.loads(request.body)
-            id = f.path.segments[2]
-
-            result = self.engine.indice(target, create=True).update(
-                body=body, id=id
-            )
-            return self.serialize_for_response(result)
-
-        # DELETE /<target>/_doc/<_id>
-        if (
-            request.method == "DELETE"
-            and len(f.path.segments) == 3
-            and f.path.segments[1] == "_doc"
-        ):
-            target = f.path.segments[0]
-            id = f.path.segments[2]
-
-            result = self.engine.indice(target, create=False).delete(id)
-            return self.serialize_for_response(result)
-
-        # GET /<target>/_search
-        if (
-            request.method == "GET"
-            and len(f.path.segments) == 2
-            and f.path.segments[1] == "_search"
-        ):
-            target = f.path.segments[0]
-            body = json.loads(request.body)
-
-            result = query_dsl.search(body, self.engine.indices(target))
-            return self.serialize_for_response(result)
-
-        # GET /<target>/_count
-        if (
-            request.method == "GET"
-            and len(f.path.segments) == 2
-            and f.path.segments[1] == "_count"
-        ):
-            target = f.path.segments[0]
-            body = json.loads(request.body)
-
-            result = query_dsl.count(body, self.engine.indices(target))
-            return self.serialize_for_response(result)
-
-        context.status_code = 405
-        return json.dumps(
-            {
-                "error": f"Incorrect HTTP method for uri [{request.url}] and method [{request.method}]"
-            }
-        )
-
-    def serialize_for_response(self, result) -> str:
-        return json.dumps(dataclasses.asdict(result), cls=JSONEncoder)
+        return handlers[0].handle(request, context)

@@ -1,9 +1,10 @@
-
 from jnius import autoclass
 
 Appendable = autoclass("java.lang.Appendable")
 ArithmeticException = autoclass("java.lang.ArithmeticException")
-ArrayIndexOutOfBoundsException = autoclass("java.lang.ArrayIndexOutOfBoundsException")
+ArrayIndexOutOfBoundsException = autoclass(
+    "java.lang.ArrayIndexOutOfBoundsException"
+)
 ArrayStoreException = autoclass("java.lang.ArrayStoreException")
 Boolean = autoclass("java.lang.Boolean")
 Byte = autoclass("java.lang.Byte")
@@ -15,14 +16,20 @@ CloneNotSupportedException = autoclass("java.lang.CloneNotSupportedException")
 Comparable = autoclass("java.lang.Comparable")
 Double = autoclass("java.lang.Double")
 Enum = autoclass("java.lang.Enum")
-EnumConstantNotPresentException = autoclass("java.lang.EnumConstantNotPresentException")
+EnumConstantNotPresentException = autoclass(
+    "java.lang.EnumConstantNotPresentException"
+)
 Exception = autoclass("java.lang.Exception")
 Float = autoclass("java.lang.Float")
 IllegalAccessException = autoclass("java.lang.IllegalAccessException")
 IllegalArgumentException = autoclass("java.lang.IllegalArgumentException")
-IllegalMonitorStateException = autoclass("java.lang.IllegalMonitorStateException")
+IllegalMonitorStateException = autoclass(
+    "java.lang.IllegalMonitorStateException"
+)
 IllegalStateException = autoclass("java.lang.IllegalStateException")
-IllegalThreadStateException = autoclass("java.lang.IllegalThreadStateException")
+IllegalThreadStateException = autoclass(
+    "java.lang.IllegalThreadStateException"
+)
 IndexOutOfBoundsException = autoclass("java.lang.IndexOutOfBoundsException")
 InstantiationException = autoclass("java.lang.InstantiationException")
 Integer = autoclass("java.lang.Integer")
@@ -37,7 +44,9 @@ NullPointerException = autoclass("java.lang.NullPointerException")
 Number = autoclass("java.lang.Number")
 NumberFormatException = autoclass("java.lang.NumberFormatException")
 Object = autoclass("java.lang.Object")
-ReflectiveOperationException = autoclass("java.lang.ReflectiveOperationException")
+ReflectiveOperationException = autoclass(
+    "java.lang.ReflectiveOperationException"
+)
 RuntimeException = autoclass("java.lang.RuntimeException")
 SecurityException = autoclass("java.lang.SecurityException")
 Short = autoclass("java.lang.Short")
@@ -46,10 +55,14 @@ StrictMath = autoclass("java.lang.StrictMath")
 String = autoclass("java.lang.String")
 StringBuffer = autoclass("java.lang.StringBuffer")
 StringBuilder = autoclass("java.lang.StringBuilder")
-StringIndexOutOfBoundsException = autoclass("java.lang.StringIndexOutOfBoundsException")
+StringIndexOutOfBoundsException = autoclass(
+    "java.lang.StringIndexOutOfBoundsException"
+)
 System = autoclass("java.lang.System")
 TypeNotPresentException = autoclass("java.lang.TypeNotPresentException")
-UnsupportedOperationException = autoclass("java.lang.UnsupportedOperationException")
+UnsupportedOperationException = autoclass(
+    "java.lang.UnsupportedOperationException"
+)
 Void = autoclass("java.lang.Void")
 
 BigDecimal = autoclass("java.math.BigDecimal")
@@ -58,7 +71,9 @@ MathContext = autoclass("java.math.MathContext")
 RoundingMode = autoclass("java.math.RoundingMode")
 
 Annotation = autoclass("java.text.Annotation")
-AttributedCharacterIterator = autoclass("java.text.AttributedCharacterIterator")
+AttributedCharacterIterator = autoclass(
+    "java.text.AttributedCharacterIterator"
+)
 AttributedString = autoclass("java.text.AttributedString")
 Bidi = autoclass("java.text.Bidi")
 BreakIterator = autoclass("java.text.BreakIterator")
@@ -98,19 +113,25 @@ Calendar = autoclass("java.util.Calendar")
 Collection = autoclass("java.util.Collection")
 Collections = autoclass("java.util.Collections")
 Comparator = autoclass("java.util.Comparator")
-ConcurrentModificationException = autoclass("java.util.ConcurrentModificationException")
+ConcurrentModificationException = autoclass(
+    "java.util.ConcurrentModificationException"
+)
 Currency = autoclass("java.util.Currency")
 Date = autoclass("java.util.Date")
 Deque = autoclass("java.util.Deque")
 Dictionary = autoclass("java.util.Dictionary")
 DoubleSummaryStatistics = autoclass("java.util.DoubleSummaryStatistics")
-DuplicateFormatFlagsException = autoclass("java.util.DuplicateFormatFlagsException")
+DuplicateFormatFlagsException = autoclass(
+    "java.util.DuplicateFormatFlagsException"
+)
 EmptyStackException = autoclass("java.util.EmptyStackException")
 Enumeration = autoclass("java.util.Enumeration")
 EventListener = autoclass("java.util.EventListener")
 EventListenerProxy = autoclass("java.util.EventListenerProxy")
 EventObject = autoclass("java.util.EventObject")
-FormatFlagsConversionMismatchException = autoclass("java.util.FormatFlagsConversionMismatchException")
+FormatFlagsConversionMismatchException = autoclass(
+    "java.util.FormatFlagsConversionMismatchException"
+)
 Formattable = autoclass("java.util.Formattable")
 FormattableFlags = autoclass("java.util.FormattableFlags")
 Formatter = autoclass("java.util.Formatter")
@@ -120,12 +141,22 @@ HashMap = autoclass("java.util.HashMap")
 HashSet = autoclass("java.util.HashSet")
 Hashtable = autoclass("java.util.Hashtable")
 IdentityHashMap = autoclass("java.util.IdentityHashMap")
-IllegalFormatCodePointException = autoclass("java.util.IllegalFormatCodePointException")
-IllegalFormatConversionException = autoclass("java.util.IllegalFormatConversionException")
+IllegalFormatCodePointException = autoclass(
+    "java.util.IllegalFormatCodePointException"
+)
+IllegalFormatConversionException = autoclass(
+    "java.util.IllegalFormatConversionException"
+)
 IllegalFormatException = autoclass("java.util.IllegalFormatException")
-IllegalFormatFlagsException = autoclass("java.util.IllegalFormatFlagsException")
-IllegalFormatPrecisionException = autoclass("java.util.IllegalFormatPrecisionException")
-IllegalFormatWidthException = autoclass("java.util.IllegalFormatWidthException")
+IllegalFormatFlagsException = autoclass(
+    "java.util.IllegalFormatFlagsException"
+)
+IllegalFormatPrecisionException = autoclass(
+    "java.util.IllegalFormatPrecisionException"
+)
+IllegalFormatWidthException = autoclass(
+    "java.util.IllegalFormatWidthException"
+)
 IllformedLocaleException = autoclass("java.util.IllformedLocaleException")
 InputMismatchException = autoclass("java.util.InputMismatchException")
 IntSummaryStatistics = autoclass("java.util.IntSummaryStatistics")
@@ -138,8 +169,12 @@ ListIterator = autoclass("java.util.ListIterator")
 Locale = autoclass("java.util.Locale")
 LongSummaryStatistics = autoclass("java.util.LongSummaryStatistics")
 Map = autoclass("java.util.Map")
-MissingFormatArgumentException = autoclass("java.util.MissingFormatArgumentException")
-MissingFormatWidthException = autoclass("java.util.MissingFormatWidthException")
+MissingFormatArgumentException = autoclass(
+    "java.util.MissingFormatArgumentException"
+)
+MissingFormatWidthException = autoclass(
+    "java.util.MissingFormatWidthException"
+)
 MissingResourceException = autoclass("java.util.MissingResourceException")
 NavigableMap = autoclass("java.util.NavigableMap")
 NavigableSet = autoclass("java.util.NavigableSet")
@@ -170,6 +205,10 @@ TooManyListenersException = autoclass("java.util.TooManyListenersException")
 TreeMap = autoclass("java.util.TreeMap")
 TreeSet = autoclass("java.util.TreeSet")
 UUID = autoclass("java.util.UUID")
-UnknownFormatConversionException = autoclass("java.util.UnknownFormatConversionException")
-UnknownFormatFlagsException = autoclass("java.util.UnknownFormatFlagsException")
+UnknownFormatConversionException = autoclass(
+    "java.util.UnknownFormatConversionException"
+)
+UnknownFormatFlagsException = autoclass(
+    "java.util.UnknownFormatFlagsException"
+)
 Vector = autoclass("java.util.Vector")
