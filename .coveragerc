@@ -1,8 +1,0 @@
-[run]
-source = molastic
-
-[report]
-exclude_lines=
-    pass
-    pragma: no cover
-    raise NotImplementedError

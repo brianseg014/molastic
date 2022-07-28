@@ -1,0 +1,43 @@
+[tool.coverage.run]
+source = ['molastic']
+
+[tool.coverage.report]
+exclude_lines = [
+    'pass',
+    'pragma: no cover',
+    'raise NotImplementedError'
+]
+
+[tool.black]
+line-length = 79
+
+[tool.flake8]
+exclude = ['molastic/painless_parsetab.py']
+
+[tool.pylint.master]
+ignore-patterns = [
+    '.*parsetab.*'
+]
+disable = [
+    'missing-module-docstring',
+    'missing-class-docstring',
+    'missing-function-docstring'
+]
+
+[tool.mypy]
+exclude = [
+    '(?x)(molastic/.*parsetab.*)'
+]
+
+[[tool.mypy.overrides]]
+module = [
+    'shapely.*',
+    'haversine',
+    'pygeohash',
+    'deepmerge',
+    'furl',
+    'ply.*',
+    'jnius'
+]
+ignore_missing_imports = true
+
