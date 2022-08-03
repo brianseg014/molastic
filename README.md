@@ -31,7 +31,7 @@ def test_something():
 
 - Types supported: Text, Long, Float, Double, Boolean, Keyword, Date, Geopoint, Geoshape
 - Analyzers: Standard
-- Document APIs: Index, Update, Delete
+- Document APIs: Index, Update, Delete, Get
 - Index APIs: Create index, Delete index, Exists, Update mapping, Get Mapping
 - Queries DSL supported: Boolean, Match, MatchAll, Term, Range, Geoshape, Geodistance, 
 - Scripting: painless (but maps cannot be accessed by dot notation)

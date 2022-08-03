@@ -301,8 +301,8 @@ class Indice:
 
         return _document, operation_result
 
-    def get(self):
-        raise NotImplementedError()
+    def get(self, id: str) -> typing.Optional[Document]:
+        return self.documents_by_id.get(id, None)
 
     def delete(
         self,

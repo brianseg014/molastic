@@ -39,6 +39,7 @@ class ElasticApiMock:
             document.AddDocumentHandler(self.engine),
             document.UpdateDocumentHandler(self.engine),
             document.DeleteDocumentHandler(self.engine),
+            document.GetDocumentHandler(self.engine),
             index.CreateIndexHandler(self.engine),
             index.DeleteIndexHandler(self.engine),
             index.ExistsHandler(self.engine),

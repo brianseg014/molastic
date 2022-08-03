@@ -60,3 +60,17 @@ def test_update_document():
         },
     )
     assert response.status_code == 200
+
+
+@mock_elasticsearch("mock://molastic")
+def test_get_document():
+    url = furl.furl("mock://molastic", path="my-index/_doc/1")
+
+    response = requests.put(str(url), json={"user": {"id": "molastic"}})
+    assert response.status_code == 200
+
+    response = requests.get(str(url))
+    assert response.status_code == 200
+
+    response = requests.get(str(furl.furl(url, path="my-index/_doc/2")))
+    assert response.status_code == 404

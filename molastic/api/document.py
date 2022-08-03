@@ -184,3 +184,47 @@ class DeleteDocumentHandler(RequestHandler):
                 "_primary_term": document["_primary_term"],
             }
         )
+
+
+class GetDocumentHandler(RequestHandler):
+    def __init__(self, engine: core.ElasticEngine) -> None:
+        self.engine = engine
+    
+    def can_handle(self, request: requests.PreparedRequest) -> bool:
+        url = furl.furl(request.url)
+
+        return (
+            request.method == "GET"
+            and len(url.path.segments) == 3
+            and url.path.segments[1] == "_doc"
+        )
+
+    def handle(self, request: requests.PreparedRequest, context) -> typing.Optional[str]:
+        url = furl.furl(request.url)
+
+        target = core.IndiceName.parse(url.path.segments[0])
+        id = url.path.segments[2]
+
+        indice = self.engine.indice(target, autocreate=True)
+
+        document = indice.get(id)
+
+        if document is None:
+            context.status_code = 404
+            return json.dumps({
+                "_index": indice._id,
+                "_type": "_doc",
+                "_id": id,
+                "found": False
+            })
+        else:
+            return json.dumps({
+                "_index": indice._id,
+                "_type": document["_type"],
+                "_id": document["_id"],
+                "_version": document["_version"],
+                "_seq_no": document["_seq_no"],
+                "_primary_term": document["_primary_term"],
+                "_found": True,
+                "_source": document["_source"]
+            })
