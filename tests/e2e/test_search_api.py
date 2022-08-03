@@ -27,7 +27,7 @@ def test_search_bool_must():
             "field": "value",
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path="my-index/_search")
     response = requests.get(
@@ -70,7 +70,7 @@ def test_search_bool_filter():
             "field": "value",
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path="my-index/_search")
     response = requests.get(
@@ -113,7 +113,7 @@ def test_search_bool_should():
     response = requests.post(
         str(doc_url), json={"field_1": "value_1", "field_2": "value_2"}
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path="my-index/_search")
     response = requests.get(
@@ -174,7 +174,7 @@ def test_search_bool_mustnot():
             "field": "value",
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path="my-index/_search")
     response = requests.get(
@@ -202,10 +202,10 @@ def test_search_matchall():
 
     doc_url = furl.furl(str(url), path=url.path).add(path="_doc")
     response = requests.post(str(doc_url), json={"field": "do_match"})
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     response = requests.post(str(doc_url), json={"field": "do_match"})
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path="my-index/_search")
     response = requests.get(str(search_url), json={"query": {"match_all": {}}})
@@ -225,10 +225,10 @@ def test_search_term():
 
     doc_url = furl.furl(str(url), path=url.path).add(path="_doc")
     response = requests.post(str(doc_url), json={"field": "do_match"})
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     response = requests.post(str(doc_url), json={"field": "do_not_match"})
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path=url.path).add(path="_search")
     response = requests.get(
@@ -265,7 +265,7 @@ def test_search_range():
             "field_date": "2022-01-01",
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path=url.path).add(path="_search")
     response = requests.get(
@@ -342,7 +342,7 @@ def test_search_geodistance():
         str(doc_url),
         json={"location": {"lat": 15.7199869, "lon": -91.3560172}},
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path=url.path).add(path="_search")
     response = requests.get(
@@ -403,7 +403,7 @@ def test_search_geoshape():
             }
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path=url.path).add(path="_search")
     response = requests.get(
@@ -455,7 +455,7 @@ def test_search_match():
 
     doc_url = furl.furl(str(url), path=url.path).add(path="_doc")
     response = requests.post(str(doc_url), json={"field": "this is a test"})
-    assert response.status_code == 200
+    assert response.status_code == 201
 
     search_url = furl.furl(str(url), path=url.path).add(path="_search")
     response = requests.get(

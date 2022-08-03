@@ -40,6 +40,9 @@ class AddOrOverwriteDocumentHandler(RequestHandler):
             body=body, id=id, op_type=op_type
         )
 
+        if operation_result == operation_result.CREATED:
+            context.status_code = 201
+
         return json.dumps(
             {
                 "shards": {"total": 1, "successful": 1, "failed": 0},
@@ -78,6 +81,9 @@ class AddDocumentHandler(RequestHandler):
         indice = self.engine.indice(target, autocreate=True)
 
         document, operation_result = indice.index(body=body)
+
+        if operation_result == operation_result.CREATED:
+            context.status_code = 201
 
         return json.dumps(
             {
