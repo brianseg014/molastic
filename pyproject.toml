@@ -41,3 +41,14 @@ module = [
 ]
 ignore_missing_imports = true
 
+[tool.tox]
+legacy_tox_ini = """
+[tox]
+envlist = py39
+
+[testenv]
+deps =
+    -rrequirements-dev.txt
+commands =
+    pytest
+"""

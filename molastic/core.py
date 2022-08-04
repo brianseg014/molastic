@@ -1678,8 +1678,8 @@ class Geopoint(Value):
     ) -> Geodistance:
         if distance_type == Geopoint.DistanceType.ARC:
             measure = haversine.haversine(
-                point1=self.point.coords[0],
-                point2=__o.point.coords[0],
+                point1=(self.point.y, self.point.x),
+                point2=(__o.point.y, __o.point.x),
                 unit=haversine.Unit.METERS,
             )
             return Geodistance({}, measure, Geodistance.Unit.METER)
