@@ -1818,7 +1818,16 @@ class Geoshape(Value):
             return Geoshape(body, shapely.geometry.Point(*coords))
         elif t == "POLYGON":
             coords = typing.cast(typing.List[list], body["coordinates"])
-            return Geoshape(body, shapely.geometry.Polygon(*coords))
+            return Geoshape(body, shapely.geometry.Polygon(shell=coords[0], holes=coords[1:]))
+        elif t == "MULTIPOLYGON":
+            coords = typing.cast(typing.List, body["coordinates"])
+            return Geoshape(body, shapely.geometry.MultiPolygon(polygons=[
+                [
+                    polygon[0], # polygon
+                    polygon[1:] # holes
+                ]
+                for polygon in coords
+            ]))
 
         raise ParsingException("geo_shape expected")
 
