@@ -79,12 +79,21 @@ def transpile(node: ANode, **kwargs):
                 )
         return transpiled_nodes
     if isinstance(node, EAssignment):
-        return ast.Assign(
-            targets=[transpile(node.left_node, ctx=ast.Store())],
-            value=transpile(node.right_node, **kwargs),
-            lineno=0,
-            col_offset=0,
-        )
+        if node.operation is None:
+            return ast.Assign(
+                targets=[transpile(node.left_node, ctx=ast.Store())],
+                value=transpile(node.right_node, **kwargs),
+                lineno=0,
+                col_offset=0,
+            )
+        else:
+            return ast.AugAssign(
+                target=transpile(node.left_node, ctx=ast.Store()),
+                value=transpile(node.right_node, **kwargs),
+                op=transpile_operation(node.operation),
+                lineno=0,
+                col_offset=0,
+            )
     if isinstance(node, ECall):
         return ast.Call(
             func=ast.Attribute(
@@ -164,6 +173,15 @@ def transpile(node: ANode, **kwargs):
                 col_offset=0,
             )
     raise NotImplementedError(f"cannot transpile {node.__class__.__name__}")
+
+
+def transpile_operation(operation: Operation):
+    if operation == Operation.ADD:
+        return ast.Add()
+    elif operation == Operation.SUB:
+        return ast.Sub()
+    else:
+        raise NotImplementedError(operation)
 
 
 def parse(source: str):
