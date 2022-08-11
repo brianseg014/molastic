@@ -1356,6 +1356,9 @@ class Date(Value):
         else:
             return f"Date('{self.value}', '{self.format}')"
 
+    def __eq__(self, __o: Date) -> bool:
+        return self.datetime == __o.datetime
+
     def __ge__(self, __o: Date) -> bool:
         return self.datetime >= __o.datetime
 
