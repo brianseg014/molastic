@@ -12,6 +12,8 @@ def dumps(obj):
 
 
 def _cast_python_object_to_java_object(o):
+    if o is None:
+        return None
     if isinstance(o, dict):
         m = java_api.HashMap()
         for k, v in o.items():
@@ -30,6 +32,8 @@ def _cast_python_object_to_java_object(o):
 
 
 def _cast_java_object_to_python_object(o):
+    if o is None:
+        return None
     if isinstance(o, java_api.Map):
         m = dict()
         for entry in o.entrySet():
@@ -45,7 +49,7 @@ def _cast_java_object_to_python_object(o):
     if isinstance(o, (str, java_api.String)):
         return str(o)
     if isinstance(o, (int, java_api.Integer)):
-        raise int(o)
+        return int(o)
     if isinstance(o, (float, java_api.Float)):
         return float(o)
     if isinstance(o, (bool, java_api.Boolean)):
