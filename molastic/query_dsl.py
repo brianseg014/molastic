@@ -65,6 +65,9 @@ def parse_compound_and_leaf_query(
     if query_type == "term":
         return TermQuery.parse(body[query_type], context)
 
+    if query_type == "prefix":
+        return PrefixQuery.parse(body[query_type], context)
+
     if query_type == "range":
         return RangeQuery.parse(body[query_type], context)
 
@@ -76,6 +79,9 @@ def parse_compound_and_leaf_query(
 
     if query_type == "match":
         return MatchQuery.parse(body[query_type], context)
+
+    if query_type == "match_bool_prefix":
+        return MatchBoolPrefixQuery.parse(body[query_type], context)
 
     if query_type == "multi_match":
         return MultiMatchQuery.parse(body[query_type], context)
@@ -297,6 +303,47 @@ class BooleanQuery(CompoundQuery):
         )
 
 
+class DisjuntionMaxQuery(CompoundQuery):
+    def __init__(
+        self, queries: typing.Sequence[Query], tie_breaker: float = 0.0
+    ) -> None:
+        self.queries = queries
+        self.tie_breaker = tie_breaker
+
+    def score(self, document: core.Document) -> float:
+        return 0
+
+    def match(self, document: core.Document) -> bool:
+        return any(q.match(document) for q in self.queries)
+
+    @classmethod
+    def parse(self, body: dict, context: core.Indice) -> DisjuntionMaxQuery:
+        not_recognized = {
+            k: v
+            for k, v in body.items()
+            if k
+            not in [
+                "queries",
+                "tie_breaker",
+            ]
+        }
+        if len(not_recognized) > 0:
+            first_param = list(not_recognized)[0]
+            raise core.ParsingException(
+                f"query does not support [{first_param}]"
+            )
+
+        return DisjuntionMaxQuery(
+            queries=tuple(
+                [
+                    parse_compound_and_leaf_query(q, context)
+                    for q in body.get("queries", [])
+                ]
+            ),
+            tie_breaker=body.get("tie_breaker", 0.0),
+        )
+
+
 class MatchAllQuery(LeafQuery):
     def score(self, document: core.Document) -> float:
         return 0.0
@@ -384,6 +431,100 @@ class TermQuery(LeafQuery):
         else:
             raise core.ParsingException(
                 "[term] query does not support long, float, boolean"
+            )
+
+
+class PrefixQuery(LeafQuery):
+    def __init__(
+        self,
+        fieldname: str,
+        fieldmapper: core.Mapper,
+        lookup_value: core.Value,
+        boost: float = 1.0,
+        case_insensitive: bool = False,
+    ) -> None:
+        super().__init__()
+        self.fieldname = fieldname
+        self.fieldmapper = fieldmapper
+        self.lookup_value = lookup_value
+        self.boost = boost
+        self.case_insensitive = case_insensitive
+
+    def score(self, document: core.Document) -> float:
+        return 1.0
+
+    def match(self, document: core.Document) -> bool:
+        stored_body = core.read_from_document(self.fieldname, document, None)
+        if stored_body is None:
+            return False
+
+        for stored_value in self.fieldmapper.map(stored_body):
+            stored_value = typing.cast(core.Keyword, stored_value)
+            if stored_value.startswith(
+                typing.cast(core.Keyword, self.lookup_value)
+            ):
+                return True
+
+        return False
+
+    @classmethod
+    def parse(cls, body: dict, context: core.Indice) -> PrefixQuery:
+        if isinstance(body, dict):
+            return cls.parse_object(body, context)
+
+        raise core.ParsingException(
+            "[prefix] query malformed, no start_object after query name"
+        )
+
+    @classmethod
+    def parse_object(cls, body: dict, context: core.Indice) -> PrefixQuery:
+        body_fields = {k: v for k, v in body.items()}
+
+        if len(body_fields) > 1:
+            field1, field2 = list(body_fields)[0:2]
+            raise core.ParsingException(
+                "[prefix] query doesn't support multiple fields, "
+                f"found [{field1}] and [{field2}]"
+            )
+
+        if len(body_fields) == 0:
+            raise core.IllegalArgumentException(
+                "fieldName must not be null or empty"
+            )
+
+        fieldname, body_fieldprops = next(iter(body_fields.items()))
+
+        fieldmapper = context.mappers.get(fieldname)
+
+        if fieldmapper.type not in ["keyword"]:
+            raise QueryShardException(
+                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [range] query"
+            )
+
+        if isinstance(body_fieldprops, str):
+            lookup_values = fieldmapper.map(body_fieldprops)
+            return PrefixQuery(
+                fieldname, fieldmapper, next(iter(lookup_values))
+            )
+
+        elif isinstance(body_fieldprops, dict):
+            body_value = body_fieldprops.get("value", None)
+            if body_value is None:
+                raise core.IllegalArgumentException("value cannot be null")
+
+            lookup_values = fieldmapper.map(body_fieldprops)
+            return PrefixQuery(
+                fieldname, fieldmapper, next(iter(lookup_values))
+            )
+
+        elif isinstance(body_fieldprops, list):
+            raise core.ParsingException(
+                "[prefix] query does not support array of values"
+            )
+
+        else:
+            raise core.ParsingException(
+                "[prefix] query does not support long, float, boolean"
             )
 
 
@@ -736,36 +877,65 @@ class GeodistanceQuery(LeafQuery):
         )
 
 
-class MatchQuery(LeafQuery):
-    class MatchWordQuery(LeafQuery):
-        def __init__(
-            self,
-            fieldname: str,
-            fieldmapper: core.TextMapper,
-            lookup_word: str,
-        ) -> None:
-            super().__init__()
-            self.fieldname = fieldname
-            self.fieldmapper = fieldmapper
-            self.lookup_word = lookup_word
+class MatchTermQuery(LeafQuery):
+    def __init__(
+        self,
+        fieldname: str,
+        fieldmapper: core.TextMapper,
+        lookup_word: str,
+    ) -> None:
+        super().__init__()
+        self.fieldname = fieldname
+        self.fieldmapper = fieldmapper
+        self.lookup_word = lookup_word
 
-        def score(self, document: core.Document) -> float:
-            return 1.0
+    def score(self, document: core.Document) -> float:
+        return 1.0
 
-        def match(self, document: core.Document) -> bool:
-            stored_body = core.read_from_document(
-                self.fieldname, document, None
-            )
-            if stored_body is None:
-                return False
-
-            for stored_value in self.fieldmapper.map(stored_body):
-                assert isinstance(stored_value, core.Text)
-                if self.lookup_word in stored_value:
-                    return True
-
+    def match(self, document: core.Document) -> bool:
+        stored_body = core.read_from_document(self.fieldname, document, None)
+        if stored_body is None:
             return False
 
+        for stored_value in self.fieldmapper.map(stored_body):
+            assert isinstance(stored_value, core.Text)
+            if self.lookup_word in stored_value:
+                return True
+
+        return False
+
+
+class MatchPrefixQuery(LeafQuery):
+    def __init__(
+        self,
+        fieldname: str,
+        fieldmapper: core.TextMapper,
+        lookup_word: str,
+    ) -> None:
+        super().__init__()
+        self.fieldname = fieldname
+        self.fieldmapper = fieldmapper
+        self.lookup_word = lookup_word
+
+    def score(self, document: core.Document) -> float:
+        return 1.0
+
+    def match(self, document: core.Document) -> bool:
+        stored_body = core.read_from_document(self.fieldname, document, None)
+        if stored_body is None:
+            return False
+
+        for stored_value in self.fieldmapper.map(stored_body):
+            assert isinstance(stored_value, core.Text)
+            if any(
+                token.startswith(self.lookup_word) for token in stored_value
+            ):
+                return True
+
+        return False
+
+
+class MatchQuery(LeafQuery):
     def __init__(
         self,
         fieldname: str,
@@ -779,7 +949,7 @@ class MatchQuery(LeafQuery):
 
         self.bool_query = BooleanQuery(
             should=[
-                MatchQuery.MatchWordQuery(self.fieldname, self.fieldmapper, w)
+                MatchTermQuery(self.fieldname, self.fieldmapper, w)
                 for w in self.lookup_value
             ]
         )
@@ -867,15 +1037,122 @@ class MatchQuery(LeafQuery):
             )
 
 
-class MultiMatchQuery(LeafQuery):
-    def __init__(self, queries: typing.Sequence[MatchQuery]) -> None:
-        self.queries = queries
+class MatchBoolPrefixQuery(LeafQuery):
+    def __init__(
+        self,
+        fieldname: str,
+        fieldmapper: core.TextMapper,
+        lookup_value: core.Text,
+    ) -> None:
+        super().__init__()
+        self.fieldname = fieldname
+        self.fieldmapper = fieldmapper
+        self.lookup_value = lookup_value
+
+        lookup_values = list(self.lookup_value)
+        self.bool_query = BooleanQuery(
+            should=[
+                *[
+                    MatchTermQuery(self.fieldname, self.fieldmapper, w)
+                    for w in lookup_values[:-1]
+                ],
+                MatchPrefixQuery(
+                    self.fieldname, self.fieldmapper, lookup_values[-1]
+                ),
+            ]
+        )
 
     def score(self, document: core.Document) -> float:
-        return 0
+        return self.bool_query.score(document)
 
     def match(self, document: core.Document) -> bool:
-        return any(q.match(document) for q in self.queries)
+        return self.bool_query.match(document)
+
+    @classmethod
+    def parse(cls, body: dict, context: core.Indice) -> MatchBoolPrefixQuery:
+        body_fields = {k: v for k, v in body.items()}
+
+        if len(body_fields) == 0:
+            raise core.IllegalArgumentException(
+                "fieldName must not be null or empty"
+            )
+
+        if len(body_fields) > 1:
+            field1, field2 = list(body_fields)[0:2]
+            raise core.ParsingException(
+                "[match bool prefix] query doesn't support multiple fields, "
+                f"found [{field1}] and [{field2}]"
+            )
+
+        fieldname, body_fieldprops = next(iter(body_fields.items()))
+
+        fieldmapper = context.mappers.get(fieldname)
+
+        if fieldmapper.type not in ["text"]:
+            raise QueryShardException(
+                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [match bool prefix] query"
+            )
+
+        assert isinstance(fieldmapper, core.TextMapper)
+
+        if isinstance(body_fieldprops, str):
+            lookup_values = fieldmapper.map(body_fieldprops)
+            return MatchBoolPrefixQuery(
+                fieldname, fieldmapper, next(iter(lookup_values))
+            )
+
+        elif isinstance(body_fieldprops, dict):
+            body_fieldprops_unrecognized = {
+                k: v
+                for k, v in body_fieldprops.items()
+                if k
+                not in [
+                    "query",
+                    "analyzer",
+                ]
+            }
+
+            if len(body_fieldprops_unrecognized) > 0:
+                first_param = list(body_fieldprops_unrecognized)[0]
+                raise core.ParsingException(
+                    f"query does not support [{first_param}]"
+                )
+
+            lookup_values = fieldmapper.map(body_fieldprops["query"])
+
+            return MatchBoolPrefixQuery(
+                fieldname, fieldmapper, next(iter(lookup_values))
+            )
+
+        elif isinstance(body_fieldprops, list):
+            raise core.ParsingException(
+                "[match bool prefix] query does not support array of values"
+            )
+
+        else:
+            raise core.ParsingException(
+                "[match bool prefix] query does not support long, float, boolean"
+            )
+
+
+class MultiMatchQuery(LeafQuery):
+    class Type(str, utils.CaseInsensitveEnum):
+        BestFields = "best_fields"
+        MostFields = "most_fields"
+        CrossFields = "cross_fields"
+        Phrase = "phrase"
+        PhrasePrefix = "phrase_prefix"
+        BoolPrefix = "bool_prefix"
+
+    def __init__(self, query: Query) -> None:
+        super().__init__()
+        self.query = query
+
+    def score(self, document: core.Document) -> float:
+        return self.query.score(document)
+
+    def match(self, document: core.Document) -> bool:
+        return self.query.match(document)
 
     @classmethod
     def parse(cls, body: dict, context: core.Indice) -> MultiMatchQuery:
@@ -883,18 +1160,31 @@ class MultiMatchQuery(LeafQuery):
             k: v for k, v in body.items() if k in ["query", "type", "fields"]
         }
 
-        if "type" in body_params:
-            if body_params["type"] != "best_fields":
-                raise NotImplementedError(
-                    "only best_fields implemented in field type of multi_match"
-                )
+        query = body_params.get("query", None)
+        fields = body_params.get("fields", [])
+        type = MultiMatchQuery.Type(
+            body_params.get("type", MultiMatchQuery.Type.BestFields)
+        )
 
-        queries = []
-        for field in body_params["fields"]:
-            queries.append(
-                MatchQuery.parse(
-                    {field: {"query": body_params["query"]}}, context
+        if type == MultiMatchQuery.Type.BestFields:
+            return MultiMatchQuery(
+                query=DisjuntionMaxQuery(
+                    queries=[
+                        MatchQuery.parse({field: {"query": query}}, context)
+                        for field in fields
+                    ]
                 )
             )
-
-        return MultiMatchQuery(queries)
+        elif type == MultiMatchQuery.Type.BoolPrefix:
+            return MultiMatchQuery(
+                query=DisjuntionMaxQuery(
+                    queries=[
+                        MatchBoolPrefixQuery.parse(
+                            {field: {"query": query}}, context
+                        )
+                        for field in fields
+                    ]
+                )
+            )
+        else:
+            raise NotImplementedError("type not yet implemented", type.value)

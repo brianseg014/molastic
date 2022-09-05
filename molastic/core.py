@@ -1102,6 +1102,14 @@ class Keyword(Value):
     def __repr__(self):
         return f"Keyword('{self.value}')"
 
+    def startswith(self, other: Keyword) -> bool:
+        is_self_primitive = isinstance(self.value, (str, int, float, bool))
+        is_other_primitive = isinstance(other.value, (str, int, float, bool))
+        if is_self_primitive and is_other_primitive:
+            return str(self.value).startswith(str(other.value))
+        else:
+            return False
+
     @classmethod
     def parse(cls, body) -> typing.Iterable[Keyword]:
         return tuple(cls.parse_single(i) for i in utils.walk_json_field(body))
