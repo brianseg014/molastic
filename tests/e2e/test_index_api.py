@@ -22,6 +22,7 @@ def test_create_index_with_mapping():
     )
     assert response.status_code == 200
 
+
 @mock_elasticsearch("mock://molastic")
 def test_create_index_with_mapping():
     url = furl.furl("mock://molastic", path="my-index")
@@ -75,6 +76,6 @@ def test_delete_index():
     response = requests.put(str(url), json={})
     assert response.status_code == 200
 
-    mapping_url = furl.furl(str(url), path=url.path).add(path='_mapping')
+    mapping_url = furl.furl(str(url), path=url.path).add(path="_mapping")
     response = requests.get(str(mapping_url), json={})
     assert response.status_code == 200

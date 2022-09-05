@@ -33,5 +33,5 @@ def test_something():
 - Analyzers: Standard
 - Document APIs: Index, Update, Delete, Get
 - Index APIs: Create index, Delete index, Exists, Update mapping, Get Mapping
-- Queries DSL supported: Boolean, Match, MatchAll, Term, Range, Geoshape, Geodistance, 
+- Queries DSL supported: Boolean, Match, MultiMatch (only rewrites to match), MatchAll, Term, Range, Geoshape, Geodistance, 
 - Scripting: painless (but maps cannot be accessed by dot notation)

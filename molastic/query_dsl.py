@@ -77,6 +77,9 @@ def parse_compound_and_leaf_query(
     if query_type == "match":
         return MatchQuery.parse(body[query_type], context)
 
+    if query_type == "multi_match":
+        return MultiMatchQuery.parse(body[query_type], context)
+
     raise Exception("unknown query type", query_type)
 
 
@@ -862,3 +865,36 @@ class MatchQuery(LeafQuery):
             raise core.ParsingException(
                 "[match] query does not support long, float, boolean"
             )
+
+
+class MultiMatchQuery(LeafQuery):
+    def __init__(self, queries: typing.Sequence[MatchQuery]) -> None:
+        self.queries = queries
+
+    def score(self, document: core.Document) -> float:
+        return 0
+
+    def match(self, document: core.Document) -> bool:
+        return any(q.match(document) for q in self.queries)
+
+    @classmethod
+    def parse(cls, body: dict, context: core.Indice) -> MultiMatchQuery:
+        body_params = {
+            k: v for k, v in body.items() if k in ["query", "type", "fields"]
+        }
+
+        if "type" in body_params:
+            if body_params["type"] != "best_fields":
+                raise NotImplementedError(
+                    "only best_fields implemented in field type of multi_match"
+                )
+
+        queries = []
+        for field in body_params["fields"]:
+            queries.append(
+                MatchQuery.parse(
+                    {field: {"query": body_params["query"]}}, context
+                )
+            )
+
+        return MultiMatchQuery(queries)

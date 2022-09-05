@@ -12,13 +12,12 @@ def test_minimum_should_match():
 
 def test_geo_shape_polygon():
     query = query_dsl.GeoshapeQuery(
-        "coverage", 
+        "coverage",
         core.GeoshapeMapper("coverage", "geo_shape"),
-        shape=core.Geoshape.parse_single({
-            "type": "point",
-            "coordinates": [-91.3560172, 15.7199869]
-        }),
-        relation=query_dsl.GeoshapeQuery.Relation.CONTAINS
+        shape=core.Geoshape.parse_single(
+            {"type": "point", "coordinates": [-91.3560172, 15.7199869]}
+        ),
+        relation=query_dsl.GeoshapeQuery.Relation.CONTAINS,
     )
     matched = query.match(
         core.Document(
@@ -33,7 +32,7 @@ def test_geo_shape_polygon():
                             (-92.443009, 14.619044),
                             (-92.090327, 17.883051),
                         ]
-                    ]
+                    ],
                 }
             }
         )
@@ -43,13 +42,12 @@ def test_geo_shape_polygon():
 
 def test_geo_shape_multipolygon():
     query = query_dsl.GeoshapeQuery(
-        "coverage", 
+        "coverage",
         core.GeoshapeMapper("coverage", "geo_shape"),
-        shape=core.Geoshape.parse_single({
-            "type": "point",
-            "coordinates": [-91.3560172, 15.7199869]
-        }),
-        relation=query_dsl.GeoshapeQuery.Relation.CONTAINS
+        shape=core.Geoshape.parse_single(
+            {"type": "point", "coordinates": [-91.3560172, 15.7199869]}
+        ),
+        relation=query_dsl.GeoshapeQuery.Relation.CONTAINS,
     )
     matched = query.match(
         core.Document(
@@ -66,7 +64,7 @@ def test_geo_shape_multipolygon():
                                 (-92.090327, 17.883051),
                             ]
                         ]
-                    ]
+                    ],
                 }
             }
         )

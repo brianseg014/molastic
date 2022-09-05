@@ -32,44 +32,34 @@ def test_mappers_parse():
 
 
 def test_mappers_merge_with_new_field():
-    mappers = Mappers.parse({ 
-        "properties": {
-            "field1": { "type": "keyword" }
-        } 
-    })
-    mappers.merge({
-        "properties": {
-            "field2": {
-                "properties": {
-                    "field3": { "type": "keyword" }
-                }
+    mappers = Mappers.parse({"properties": {"field1": {"type": "keyword"}}})
+    mappers.merge(
+        {
+            "properties": {
+                "field2": {"properties": {"field3": {"type": "keyword"}}}
             }
         }
-    })
+    )
     assert mappers.get("field1").type == "keyword"
     assert mappers.get("field2").type == "object"
     assert mappers.get("field2.field3").type == "keyword"
 
 
 def test_mappers_merge_with_new_sub_field():
-    mappers = Mappers.parse({
-        "properties": {
-            "field1": {
-                "properties": {
-                    "field2": { "type": "keyword" }
-                }
+    mappers = Mappers.parse(
+        {
+            "properties": {
+                "field1": {"properties": {"field2": {"type": "keyword"}}}
             }
         }
-    })
-    mappers.merge({
-        "properties": {
-            "field1": {
-                "properties": {
-                    "field3": { "type": "keyword" }
-                }
+    )
+    mappers.merge(
+        {
+            "properties": {
+                "field1": {"properties": {"field3": {"type": "keyword"}}}
             }
         }
-    })
+    )
     assert mappers.get("field1").type == "object"
     assert mappers.get("field1.field2").type == "keyword"
     assert mappers.get("field1.field3").type == "keyword"
@@ -77,16 +67,8 @@ def test_mappers_merge_with_new_sub_field():
 
 def test_mappers_merge_raise_when_chaging_type():
     with pytest.raises(IllegalArgumentException):
-        mappers = Mappers.parse({
-            "properties": {
-                "field": { "type": "keyword" }
-            }
-        })
-        mappers.merge({
-            "properties": {
-                "field": { "type": "long" }
-            }
-        })
+        mappers = Mappers.parse({"properties": {"field": {"type": "keyword"}}})
+        mappers.merge({"properties": {"field": {"type": "long"}}})
 
 
 def test_mappers_dynamic_true_non_existent_field():
@@ -97,11 +79,7 @@ def test_mappers_dynamic_true_non_existent_field():
 
 
 def test_mappers_dynamic_true_existent_field():
-    mappers = Mappers.parse({
-        "properties": {
-            "field": { "type": "keyword" }
-        }
-    })
+    mappers = Mappers.parse({"properties": {"field": {"type": "keyword"}}})
     mappers.dynamic_map({"field": "value"})
 
     assert mappers.get("field")
@@ -183,9 +161,7 @@ def test_mappers_dynamic_date_detection_off():
 
 
 def test_mappers_dynamic_numeric_detection_off():
-    mappers = Mappers(
-        dynamic_mapping=DynamicMapping(numeric_detection=False)
-    )
+    mappers = Mappers(dynamic_mapping=DynamicMapping(numeric_detection=False))
     mappers.dynamic_map(
         {
             "string_with_number": "1",
@@ -199,12 +175,8 @@ def test_mappers_dynamic_numeric_detection_off():
 def test_mappers_mappings():
     mappings = {
         "properties": {
-            "field1": { "type": "keyword" },
-            "field2": {
-                "properties": {
-                    "field3": { "type": "keyword" }
-                }
-            }
+            "field1": {"type": "keyword"},
+            "field2": {"properties": {"field3": {"type": "keyword"}}},
         }
     }
     mappers = Mappers.parse(mappings)

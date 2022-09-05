@@ -470,3 +470,58 @@ def test_search_match():
     )
     assert response.status_code == 200
     assert response.json()["hits"]["total"]["value"] == 0
+
+
+@mock_elasticsearch("mock://molastic")
+def test_search_multi_match():
+    url = furl.furl("mock://molastic", path="my-index")
+
+    response = requests.put(
+        str(url),
+        json={
+            "mappings": {
+                "properties": {
+                    "field1": {"type": "text"},
+                    "field2": {"type": "text"},
+                }
+            }
+        },
+    )
+    assert response.status_code == 200
+
+    doc_url = furl.furl(str(url), path=url.path).add(path="_doc")
+    response = requests.post(
+        str(doc_url),
+        json={"field1": "this is a test", "field2": "this is also a test"},
+    )
+    assert response.status_code == 201
+
+    search_url = furl.furl(str(url), path=url.path).add(path="_search")
+    response = requests.get(
+        str(search_url),
+        json={
+            "query": {
+                "multi_match": {
+                    "query": "this is a test",
+                    "fields": ["field1", "field2"],
+                }
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["hits"]["total"]["value"] == 1
+
+    search_url = furl.furl(str(url), path=url.path).add(path="_search")
+    response = requests.get(
+        str(search_url),
+        json={
+            "query": {
+                "multi_match": {
+                    "query": "piccolo my dog",
+                    "fields": ["field1", "field2"],
+                }
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["hits"]["total"]["value"] == 0

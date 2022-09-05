@@ -20,9 +20,9 @@ def test_painless_monolith():
     painless.execute(
         'ctx["_source"]["locations"].add(params["location"]);',
         {
-            "ctx": java_json.loads(
-                json.dumps({"_source": {"locations": []}})
+            "ctx": java_json.loads(json.dumps({"_source": {"locations": []}})),
+            "params": java_json.loads(
+                json.dumps({"location": {"lat": 0.0, "lon": 0.0}})
             ),
-            "params": java_json.loads(json.dumps({ "location": { "lat": 0.0, "lon": 0.0 } })),
         },
     )
