@@ -18,7 +18,7 @@ class SearchHandler(RequestHandler):
         url = furl.furl(request.url)
 
         return (
-            request.method == "GET"
+            request.method in ["GET", "POST"]
             and len(url.path.segments) == 2
             and url.path.segments[1] == "_search"
         )
