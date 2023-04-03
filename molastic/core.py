@@ -215,7 +215,7 @@ class Indice:
 
         self.sequence = itertools.count()
         self.aliases: typing.Sequence[str] = []
-        self.mappers = Mappers()
+        self.mappings: typing.Mapping = {"properties": {}}
         self.settings: typing.Mapping = {
             "index": {
                 "creation_date": datetime.datetime.now().timestamp(),
@@ -232,15 +232,17 @@ class Indice:
             self.update_mappings(mappings)
 
     @property
-    def mappings(self) -> typing.Mapping:
-        return self.mappers.mappings
+    def mappers(self) -> typing.Dict[str, Mapper]:
+        return MappingsParser.parse(self.mappings)
 
     @property
     def documents(self) -> typing.Sequence[Document]:
         return tuple(self.documents_by_id.values())
 
     def update_mappings(self, mappings: typing.Mapping):
-        self.mappers.merge(mappings)
+        self.mappings = MappingsMerger.merge(
+            mapping1=self.mappings, mapping2=mappings
+        )
 
     def index(
         self,
@@ -420,36 +422,22 @@ class Indice:
         return str(uuid.uuid4())
 
     def make_searchable(self, document: Document):
-        self.mappers.dynamic_map(document["_source"])
+        dynamic_mapping = DynamicMapping()
+        mappings = dynamic_mapping.map_source(document["_source"])
+
+        self.mappings = MappingsMerger.merge(
+            mapping1=self.mappings, mapping2=mappings, dynamic=True
+        )
 
         self.documents_by_id[document["_id"]] = document
 
 
 class Mapper(abc.ABC):
-    def __init__(self, fieldpath: str, type: str) -> None:
-        self.fieldpath = fieldpath
-        self.fieldmapping: typing.MutableMapping[str, typing.Any] = {
-            "type": type
-        }
-
-    @property
-    def fieldname(self) -> str:
-        return self.fieldpath.split(".")[-1]
-
-    @property
-    def type(self) -> str:
-        return self.fieldmapping["type"]
-
-    @property
-    def mappings(self) -> typing.Mapping:
-        return self.fieldmapping
-
-    @abc.abstractmethod
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        "Create merger functions. A merger function merges actual with new mappings"
-        pass
+    def __init__(
+        self, type: str, fields: typing.Optional[typing.Mapping] = None
+    ) -> None:
+        self.type = type
+        self.fields = fields
 
     @abc.abstractmethod
     def map(self, body) -> typing.Iterable[Value]:
@@ -457,60 +445,15 @@ class Mapper(abc.ABC):
         pass
 
 
-class ObjectMapper(Mapper, collections.abc.MutableMapping):
-    @property
-    def mappings(self) -> dict:
-        if "properties" in self.fieldmapping:
-            return {
-                "properties": {
-                    k: typing.cast(Mapper, v).mappings
-                    for k, v in self.fieldmapping["properties"].items()
-                }
-            }
-        else:
-            return {}
-
-    def __getitem__(self, __k):
-        return self.fieldmapping["properties"][__k]
-
-    def __setitem__(self, __k, __v):
-        if "properties" not in self.fieldmapping:
-            self.fieldmapping["properties"] = {}
-        self.fieldmapping["properties"][__k] = __v
-
-    def __delitem__(self, __k):
-        del self.fieldmapping["properties"][__k]
-
-    def __iter__(self):
-        return iter(self.fieldmapping["properties"])
-
-    def __len__(self):
-        return len(self.fieldmapping["properties"])
-
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        for paramname in fieldmapping:
-            if paramname == "properties":
-                pass
-            else:
-                raise MapperParsingException(
-                    f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
-                )
-        return []
-
-    def map(self, body) -> typing.Iterable[Value]:
-        raise TypeError("should not map")
-
-
 class KeywordMapper(Mapper):
-    @property
-    def ignore_above(self) -> int:
-        return self.fieldmapping.get("ignore_above", 2147483647)
-
-    @ignore_above.setter
-    def ignore_above(self, ignore_above):
-        self.fieldmapping["ignore_above"] = ignore_above
+    def __init__(
+        self,
+        type: str,
+        ignore_above: int = 2147483647,
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(type, fields)
+        self.ignore_above = ignore_above
 
     def merge(
         self, fieldmapping: typing.Mapping
@@ -590,16 +533,14 @@ class LongMapper(Mapper):
 
 
 class DateMapper(Mapper):
-    @property
-    def format(self) -> str:
-        return self.fieldmapping.get(
-            "format", "strict_date_optional_time||epoch_millis"
-        )
-
-    @format.setter
-    def format(self, format):
-        Date.parse_date_format(format)
-        self.fieldmapping["format"] = format
+    def __init__(
+        self,
+        type: str,
+        format: str = "strict_date_optional_time||epoch_millis",
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(type, fields)
+        self.format = format
 
     def __repr__(self):
         return f"DateMapper(format={repr(self.format)})"
@@ -636,9 +577,18 @@ class DateMapper(Mapper):
 class TextMapper(Mapper):
     default_analyzer = analysis.StandardAnalyzer()
 
-    def __init__(self, fieldpath: str, type: str) -> None:
-        super().__init__(fieldpath, type)
-        self._analyzer: analysis.Analyzer = self.default_analyzer
+    def __init__(
+        self,
+        type: str,
+        analyzer: str = "standard",
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(type, fields)
+        self.analyzer = analyzer
+
+    # def __init__(self, fieldpath: str, type: str) -> None:
+    #     super().__init__(fieldpath, type)
+    #     self._analyzer: analysis.Analyzer = self.default_analyzer
 
     @property
     def analyzer(self) -> analysis.Analyzer:
@@ -736,7 +686,44 @@ class DynamicMapping:
         self.dynamic_date_formats = dynamic_date_formats
         self.numeric_detection = numeric_detection
 
-    def map(self, value) -> typing.Optional[typing.Mapping]:
+    def map_source(self, source: dict) -> None:
+        dicttree = lambda: collections.defaultdict(dicttree)
+
+        mappings = dicttree()
+
+        allowed_prefixes: typing.List[str] = []
+
+        for path, body in utils.flatten(source):
+            if path.count(".") > 0:
+                # Child node
+                if not any(path.startswith(f) for f in allowed_prefixes):
+                    # If not child node of ObjectMapper, ignore
+                    continue
+
+            segments = utils.intersperse(path.split("."), "properties")
+
+            if self.dynamic == DynamicMapping.Dynamic.strict:
+                parent_segment = segments[-2] if len(segments) > 1 else "_doc"
+                raise StrictDynamicMappingException(
+                    f"mapping set to strict, dynamic introduction of [{path}] within [{parent_segment}] is not allowed"
+                )
+
+            mapping_v = self.map_value(body)
+            if mapping_v is None:
+                continue
+
+            type = mapping_v.get("type", "object")
+            if type == "object":
+                # Let visit object child nodes
+                allowed_prefixes.append(path)
+                continue
+
+            fragment = utils.get_from_mapping(segments[:-1], mappings)
+            fragment[segments[-1]] = mapping_v
+
+        return mappings
+
+    def map_value(self, value) -> typing.Optional[typing.Mapping]:
         """Value in the document to infer data type.
         Returns None if the field should not be mapped.
         """
@@ -801,10 +788,75 @@ class DynamicMapping:
             raise NotImplementedError(type(value), value)
 
 
-class Mappers:
+class MappingsMerger:
+    @classmethod
+    def merge(
+        cls,
+        mapping1: typing.Mapping,
+        mapping2: typing.Mapping,
+        dynamic: bool = False,
+    ) -> typing.Mapping:
+        dicttree = lambda: collections.defaultdict(dicttree)
+
+        mappings = dicttree()
+
+        mapping1_flatten = dict(utils.flatten(mapping1))
+        mapping2_flatten = dict(utils.flatten(mapping2))
+
+        patterns = [re.compile("^properties.\\w+$")]
+
+        for mapping_k in list(mapping1_flatten.keys()) + list(
+            mapping2_flatten.keys()
+        ):
+            if not any(p.match(mapping_k) for p in patterns):
+                continue
+
+            segments = mapping_k.split(".")
+
+            if mapping_k in mapping1_flatten and mapping_k in mapping2_flatten:
+                mapping1_type = mapping1_flatten[mapping_k].get(
+                    "type", "object"
+                )
+                mapping2_type = mapping2_flatten[mapping_k].get(
+                    "type", "object"
+                )
+                if mapping1_type != mapping2_type:
+                    raise IllegalArgumentException(
+                        f"mapper [{segments[-1]}] cannot be changed from "
+                        f"type [{mapping1_type}] to [{mapping2_type}]"
+                    )
+
+            if mapping_k in mapping1_flatten:
+                type = mapping1_flatten[mapping_k].get("type", "object")
+
+            if mapping_k in mapping2_flatten:
+                type = mapping2_flatten[mapping_k].get("type", "object")
+
+            if type == "object":
+                # Let visit object child nodes
+                patterns.append(re.compile(f"^{mapping_k}.properties.\\w+$"))
+                continue
+
+            if dynamic:
+                mapping_v = utils.mapping_dynamic_merger.merge(
+                    copy.deepcopy(mapping1_flatten.get(mapping_k, {})),
+                    copy.deepcopy(mapping2_flatten.get(mapping_k, {})),
+                )
+            else:
+                mapping_v = utils.mapping_merger.merge(
+                    copy.deepcopy(mapping1_flatten.get(mapping_k, {})),
+                    copy.deepcopy(mapping2_flatten.get(mapping_k, {})),
+                )
+
+            fragment = utils.get_from_mapping(segments[:-1], mappings)
+            fragment[segments[-1]] = mapping_v
+
+        return mappings
+
+
+class MappingsParser:
 
     MAPPERS: typing.Mapping[str, typing.Type[Mapper]] = {
-        "object": ObjectMapper,
         "keyword": KeywordMapper,
         "boolean": BooleanMapper,
         "long": LongMapper,
@@ -816,205 +868,16 @@ class Mappers:
         "geo_shape": GeoshapeMapper,
     }
 
-    def __init__(
-        self,
-        dynamic_mapping: typing.Optional[DynamicMapping] = None,
-    ) -> None:
-        self.dynamic_mapping: DynamicMapping
-        if dynamic_mapping is None:
-            self.dynamic_mapping = DynamicMapping()
-        else:
-            self.dynamic_mapping = dynamic_mapping
-
-        self.fieldmappers: typing.Dict[str, Mapper] = {}
-
-    def __iter__(self):
-        yield from utils.flatten(self.fieldmappers)
-
-    @property
-    def mappings(self) -> typing.Mapping:
-        return {
-            "properties": {
-                k: typing.cast(Mapper, v).mappings
-                for k, v in self.fieldmappers.items()
-            }
-        }
-
-    def put(
-        self,
-        fieldpath: str,
-        fieldmapper: Mapper,
-    ) -> None:
-        segments = fieldpath.split(".")
-
-        fragment = utils.get_from_mapping(segments[:-1], self.fieldmappers)
-        fragment[segments[-1]] = fieldmapper
-
-    def get(self, fieldpath: str, _default: typing.Any = MISSING) -> Mapper:
-        segments = fieldpath.split(".")
-
-        try:
-            return utils.get_from_mapping(segments[:-1], self.fieldmappers)[
-                segments[-1]
-            ]
-        except KeyError as e:
-            if _default is MISSING:
-                raise e
-            return _default
-
-    def has(self, fieldpath: str) -> bool:
-        segments = fieldpath.split(".")
-
-        try:
-            fragment = utils.get_from_mapping(segments[:-1], self.fieldmappers)
-            return segments[-1] in fragment
-        except KeyError:
-            return False
-
-    def merge(self, mappings: typing.Mapping) -> None:
-        patterns = [re.compile("^properties.\\w+$")]
-
-        mergers: typing.List[typing.Callable[[], None]] = []
-        for mappings_path, new_fieldmapping in utils.flatten(mappings):
-            # Only if match any pattern is a field
-            # otherwise could be a some field property
-            if not any(p.match(mappings_path) for p in patterns):
-                continue
-
-            segments = mappings_path.split(".")[1::2]
-            if len(segments) == 0:
-                # Match the first "properties"
-                continue
-
-            fieldpath = ".".join(segments)
-
-            actual_fieldmapper = self.get(fieldpath, None)
-
-            if new_fieldmapping.get("type", "object") == "object":
-                # Allow to iterate over object.properties
-                patterns.append(
-                    re.compile(f"^{mappings_path}.properties.\\w+$")
-                )
-
-            if actual_fieldmapper is None:
-                # Will put new fieldmapper
-                new_type = new_fieldmapping.get("type", "object")
-                try:
-                    clstype = Mappers.MAPPERS[new_type]
-                except KeyError:
-                    raise MapperParsingException(
-                        f"No handler for type [{new_type}] declared on field [{segments[-1]}]"
-                    )
-
-                fieldmapper = clstype(fieldpath, new_type)
-                assert isinstance(fieldmapper, Mapper)
-
-                mergers.extend(
-                    fieldmapper.merge(
-                        {
-                            k: v
-                            for k, v in new_fieldmapping.items()
-                            if k != "type"
-                        }
-                    )
-                )
-                self.put(fieldpath, fieldmapper)
-
-            else:
-                # Mappings already exists, should update
-                # the actual fieldmapping and fieldmapper
-                actual_type = actual_fieldmapper.type
-                new_type = new_fieldmapping.get("type", "object")
-                if actual_type != new_type:
-                    raise IllegalArgumentException(
-                        f"mapper [{segments[-1]}] cannot be changed from "
-                        f"type [{actual_type}] to [{new_type}]"
-                    )
-
-                mergers.extend(
-                    actual_fieldmapper.merge(
-                        {
-                            k: v
-                            for k, v in new_fieldmapping.items()
-                            if k != "type"
-                        }
-                    )
-                )
-
-        for merger in mergers:
-            merger()
-
-    def dynamic_map(self, source: dict) -> None:
-        allowed_prefixes: typing.List[str] = []
-
-        mergers: typing.List[typing.Callable[[], None]] = []
-        for fieldpath, fieldvalue in utils.flatten(source):
-            if fieldpath.count(".") > 0:
-                # Child node
-                if not any(fieldpath.startswith(f) for f in allowed_prefixes):
-                    # If not child node of ObjectMapper, ignore
-                    continue
-
-            if self.has(fieldpath):
-                # Let to visit child nodes if is ObjectMapper
-                fieldmapper = self.get(fieldpath)
-                if fieldmapper.type == "object":
-                    allowed_prefixes.append(fieldpath)
-                # Ignore known mapper
-                continue
-
-            segments = fieldpath.split(".")
-
-            if self.dynamic_mapping.dynamic == DynamicMapping.Dynamic.strict:
-                parent_segment = segments[-2] if len(segments) > 1 else "_doc"
-                raise StrictDynamicMappingException(
-                    f"mapping set to strict, dynamic introduction of [{fieldpath}] within [{parent_segment}] is not allowed"
-                )
-
-            fieldmapping = self.dynamic_mapping.map(fieldvalue)
-            if fieldmapping is None:
-                continue
-
-            fieldtype = fieldmapping.get("type", "object")
-            if fieldtype == "object":
-                # Let visit object child nodes
-                allowed_prefixes.append(fieldpath)
-
-            try:
-                clstype = Mappers.MAPPERS[fieldtype]
-            except KeyError:
-                raise MapperParsingException(
-                    f"No handler for type [{fieldtype}] declared on field [{segments[-1]}]"
-                )
-
-            fieldmapper = clstype(fieldpath, fieldtype)
-            assert isinstance(fieldmapper, Mapper)
-
-            mergers.extend(
-                fieldmapper.merge(
-                    {k: v for k, v in fieldmapping.items() if k != "type"}
-                )
-            )
-            self.put(fieldpath, fieldmapper)
-
-        for merger in mergers:
-            merger()
-
-    def __repr__(self):
-        return repr(self.fieldmappers)
-
     @classmethod
-    def parse(cls, mappings: typing.Mapping) -> Mappers:
+    def parse(cls, mappings: typing.Mapping) -> typing.Dict[str, Mapper]:
         if any(True for k in mappings.keys() if k != "properties"):
             raise MapperParsingException(
                 f"Root mapping definition has unsupported parameters: {mappings}"
             )
 
-        mappers = Mappers()
-
         patterns = [re.compile("^properties.\\w+$")]
 
-        mergers: typing.List[typing.Callable[[], None]] = []
+        mappers: typing.Dict[str, Mapper] = {}
         for mapping_k, mapping_v in utils.flatten(mappings):
             if not any(p.match(mapping_k) for p in patterns):
                 continue
@@ -1029,32 +892,31 @@ class Mappers:
                     f"on field [{segments[-1]}] but got {mapping_v}"
                 )
 
-            fieldpath = ".".join(segments)
-            fieldtype = mapping_v.get("type", "object")
+            path = ".".join(segments)
+            type = mapping_v.get("type", "object")
 
-            if fieldtype == "object":
+            if type == "object":
                 # Let visit object child nodes
                 patterns.append(re.compile(f"^{mapping_k}.properties.\\w+$"))
+                continue
+
+            for subfield in mapping_v.get("fields", {}):
+                patterns.append(re.compile(f"^{mapping_k}.fields.{subfield}$"))
 
             try:
-                clstype = Mappers.MAPPERS[fieldtype]
+                clstype = MappingsParser.MAPPERS[type]
             except KeyError:
                 raise MapperParsingException(
-                    f"No handler for type [{fieldtype}] declared on field [{segments[-1]}]"
+                    f"No handler for type [{type}] declared on field [{segments[-1]}]"
                 )
 
-            fieldmapper = clstype(fieldpath, fieldtype)
-            assert isinstance(fieldmapper, Mapper)
+            if "type" not in mapping_v:
+                mapper = clstype(type="object", **mapping_v)
+            else:
+                mapper = clstype(**mapping_v)
+            assert isinstance(mapper, Mapper)
 
-            mergers.extend(
-                fieldmapper.merge(
-                    {k: v for k, v in mapping_v.items() if k != "type"}
-                )
-            )
-            mappers.put(fieldpath, fieldmapper)
-
-        for merger in mergers:
-            merger()
+            mappers[path] = mapper
 
         return mappers
 

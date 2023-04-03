@@ -9,6 +9,12 @@ import deepmerge
 
 
 source_merger = deepmerge.Merger([], ["override"], ["override"])
+mapping_merger = deepmerge.Merger(
+    [(list, "append"), (dict, "merge"), (set, "union")], [], []
+)
+mapping_dynamic_merger = deepmerge.Merger(
+    [(list, "append"), (dict, "merge"), (set, "union")], ["use_existing"], []
+)
 
 
 class CaseInsensitveEnum(enum.Enum):
@@ -24,6 +30,12 @@ class CaseInsensitveEnum(enum.Enum):
 def match_numeric_pattern(v):
     PATTERN = re.compile(r"^\d+(\.\d+)?$")
     return PATTERN.match(v) is not None
+
+
+def intersperse(lst, item):
+    result = [item] * (len(lst) * 2 - 1)
+    result[0::2] = lst
+    return result
 
 
 def flatten(
