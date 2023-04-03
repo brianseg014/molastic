@@ -12,7 +12,6 @@ def test_minimum_should_match():
 
 def test_geo_shape_polygon():
     query = query_dsl.GeoshapeQuery(
-        "coverage",
         core.GeoshapeMapper("coverage", "geo_shape"),
         shape=core.Geoshape.parse_single(
             {"type": "point", "coordinates": [-91.3560172, 15.7199869]}
@@ -42,7 +41,6 @@ def test_geo_shape_polygon():
 
 def test_geo_shape_multipolygon():
     query = query_dsl.GeoshapeQuery(
-        "coverage",
         core.GeoshapeMapper("coverage", "geo_shape"),
         shape=core.Geoshape.parse_single(
             {"type": "point", "coordinates": [-91.3560172, 15.7199869]}

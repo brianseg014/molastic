@@ -639,3 +639,35 @@ def test_search_multi_match_bool_prefix():
     )
     assert response.status_code == 200
     assert response.json()["hits"]["total"]["value"] == 0
+
+
+@mock_elasticsearch("mock://molastic")
+def test_search_multifield():
+    url = furl.furl("mock://molastic", path="my-index")
+
+    response = requests.put(
+        str(url),
+        json={
+            "mappings": {
+                "properties": {
+                    "field": {
+                        "type": "text",
+                        "fields": {"field1k": {"type": "keyword"}},
+                    }
+                }
+            }
+        },
+    )
+    assert response.status_code == 200
+
+    doc_url = furl.furl(str(url), path=url.path).add(path="_doc")
+    response = requests.post(str(doc_url), json={"field": "This is a test"})
+    assert response.status_code == 201
+
+    search_url = furl.furl(str(url), path=url.path).add(path="_search")
+    response = requests.get(
+        str(search_url),
+        json={"query": {"term": {"field.field1k": "This is a test"}}},
+    )
+    assert response.status_code == 200
+    assert response.json()["hits"]["total"]["value"] == 1

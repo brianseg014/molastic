@@ -434,8 +434,12 @@ class Indice:
 
 class Mapper(abc.ABC):
     def __init__(
-        self, type: str, fields: typing.Optional[typing.Mapping] = None
+        self,
+        sourcepath: str,
+        type: str,
+        fields: typing.Optional[typing.Mapping],
     ) -> None:
+        self.sourcepath = sourcepath
         self.type = type
         self.fields = fields
 
@@ -448,11 +452,12 @@ class Mapper(abc.ABC):
 class KeywordMapper(Mapper):
     def __init__(
         self,
+        sourcepath: str,
         type: str,
         ignore_above: int = 2147483647,
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(type, fields)
+        super().__init__(sourcepath, type, fields)
         self.ignore_above = ignore_above
 
     def merge(
@@ -477,6 +482,14 @@ class KeywordMapper(Mapper):
 
 
 class BooleanMapper(Mapper):
+    def __init__(
+        self,
+        sourcepath: str,
+        type: str,
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(sourcepath, type, fields)
+
     def merge(
         self, fieldmapping: typing.Mapping
     ) -> typing.Iterable[typing.Callable[[], None]]:
@@ -491,6 +504,14 @@ class BooleanMapper(Mapper):
 
 
 class FloatMapper(Mapper):
+    def __init__(
+        self,
+        sourcepath: str,
+        type: str,
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(sourcepath, type, fields)
+
     def merge(
         self, fieldmapping: typing.Mapping
     ) -> typing.Iterable[typing.Callable[[], None]]:
@@ -505,6 +526,14 @@ class FloatMapper(Mapper):
 
 
 class DoubleMapper(Mapper):
+    def __init__(
+        self,
+        sourcepath: str,
+        type: str,
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(sourcepath, type, fields)
+
     def merge(
         self, fieldmapping: typing.Mapping
     ) -> typing.Iterable[typing.Callable[[], None]]:
@@ -519,6 +548,14 @@ class DoubleMapper(Mapper):
 
 
 class LongMapper(Mapper):
+    def __init__(
+        self,
+        sourcepath: str,
+        type: str,
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(sourcepath, type, fields)
+
     def merge(
         self, fieldmapping: typing.Mapping
     ) -> typing.Iterable[typing.Callable[[], None]]:
@@ -535,11 +572,12 @@ class LongMapper(Mapper):
 class DateMapper(Mapper):
     def __init__(
         self,
+        sourcepath: str,
         type: str,
         format: str = "strict_date_optional_time||epoch_millis",
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(type, fields)
+        super().__init__(sourcepath, type, fields)
         self.format = format
 
     def __repr__(self):
@@ -579,11 +617,12 @@ class TextMapper(Mapper):
 
     def __init__(
         self,
+        sourcepath: str,
         type: str,
         analyzer: str = "standard",
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(type, fields)
+        super().__init__(sourcepath, type, fields)
         self.analyzer = analyzer
 
     # def __init__(self, fieldpath: str, type: str) -> None:
@@ -637,6 +676,14 @@ class TextMapper(Mapper):
 
 
 class GeopointMapper(Mapper):
+    def __init__(
+        self,
+        sourcepath: str,
+        type: str,
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(sourcepath, type, fields)
+
     def merge(
         self, fieldmapping: typing.Mapping
     ) -> typing.Iterable[typing.Callable[[], None]]:
@@ -651,6 +698,14 @@ class GeopointMapper(Mapper):
 
 
 class GeoshapeMapper(Mapper):
+    def __init__(
+        self,
+        sourcepath: str,
+        type: str,
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(sourcepath, type, fields)
+
     def merge(
         self, fieldmapping: typing.Mapping
     ) -> typing.Iterable[typing.Callable[[], None]]:
@@ -878,30 +933,29 @@ class MappingsParser:
         patterns = [re.compile("^properties.\\w+$")]
 
         mappers: typing.Dict[str, Mapper] = {}
-        for mapping_k, mapping_v in utils.flatten(mappings):
-            if not any(p.match(mapping_k) for p in patterns):
+        for mappingpath, mapping in utils.flatten(mappings):
+            if not any(p.match(mappingpath) for p in patterns):
                 continue
 
-            segments = mapping_k.split(".")[1::2]
+            segments = mappingpath.split(".")[1::2]
             if len(segments) == 0:
                 continue
 
-            if not isinstance(mapping_v, collections.abc.Mapping):
+            # FIELD
+
+            if not isinstance(mapping, collections.abc.Mapping):
                 raise MapperParsingException(
                     f"Expected map for property [properties] "
-                    f"on field [{segments[-1]}] but got {mapping_v}"
+                    f"on field [{segments[-1]}] but got {mapping}"
                 )
 
-            path = ".".join(segments)
-            type = mapping_v.get("type", "object")
+            sourcepath = ".".join(segments)
+            type = mapping.get("type", "object")
 
             if type == "object":
                 # Let visit object child nodes
-                patterns.append(re.compile(f"^{mapping_k}.properties.\\w+$"))
+                patterns.append(re.compile(f"^{mappingpath}.properties.\\w+$"))
                 continue
-
-            for subfield in mapping_v.get("fields", {}):
-                patterns.append(re.compile(f"^{mapping_k}.fields.{subfield}$"))
 
             try:
                 clstype = MappingsParser.MAPPERS[type]
@@ -910,13 +964,37 @@ class MappingsParser:
                     f"No handler for type [{type}] declared on field [{segments[-1]}]"
                 )
 
-            if "type" not in mapping_v:
-                mapper = clstype(type="object", **mapping_v)
+            if "type" not in mapping:
+                mappers[sourcepath] = clstype(
+                    sourcepath, type="object", **mapping
+                )
             else:
-                mapper = clstype(**mapping_v)
-            assert isinstance(mapper, Mapper)
+                mappers[sourcepath] = clstype(sourcepath, **mapping)
 
-            mappers[path] = mapper
+            # SUBFIELDS
+            for subfield, mapping in mapping.get("fields", {}).items():
+                if not isinstance(mapping, collections.abc.Mapping):
+                    raise MapperParsingException(
+                        f"Expected map for property [properties] "
+                        f"on field [{subfield}] but got {mapping}"
+                    )
+
+                type = mapping.get("type", "object")
+                if type == "object":
+                    raise MapperParsingException(
+                        f"Unsupported type [{type}] declared on field [{subfield}]"
+                    )
+
+                try:
+                    clstype = MappingsParser.MAPPERS[type]
+                except KeyError:
+                    raise MapperParsingException(
+                        f"No handler for type [{type}] declared on field [{subfield}]"
+                    )
+
+                mapper = clstype(sourcepath, **mapping)
+
+                mappers[f"{sourcepath}.{subfield}"] = mapper
 
         return mappers
 

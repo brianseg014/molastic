@@ -355,15 +355,13 @@ class MatchAllQuery(LeafQuery):
 class TermQuery(LeafQuery):
     def __init__(
         self,
-        fieldname: str,
-        fieldmapper: core.Mapper,
+        mapper: core.Mapper,
         lookup_value: core.Value,
         boost: float = 1.0,
         case_insensitive: bool = False,
     ) -> None:
         super().__init__()
-        self.fieldname = fieldname
-        self.fieldmapper = fieldmapper
+        self.mapper = mapper
         self.lookup_value = lookup_value
         self.boost = boost
         self.case_insensitive = case_insensitive
@@ -372,11 +370,13 @@ class TermQuery(LeafQuery):
         return 1.0
 
     def match(self, document: core.Document) -> bool:
-        stored_body = core.read_from_document(self.fieldname, document, None)
+        stored_body = core.read_from_document(
+            self.mapper.sourcepath, document, None
+        )
         if stored_body is None:
             return False
 
-        for stored_value in self.fieldmapper.map(stored_body):
+        for stored_value in self.mapper.map(stored_body):
             if stored_value == self.lookup_value:
                 return True
 
@@ -407,21 +407,21 @@ class TermQuery(LeafQuery):
                 "fieldName must not be null or empty"
             )
 
-        fieldname, body_fieldprops = next(iter(body_fields.items()))
+        mapperpath, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapper = context.mappers.get(fieldname)
+        mapper = context.mappers.get(mapperpath)
 
         if isinstance(body_fieldprops, str):
-            lookup_values = fieldmapper.map(body_fieldprops)
-            return TermQuery(fieldname, fieldmapper, next(iter(lookup_values)))
+            lookup_values = mapper.map(body_fieldprops)
+            return TermQuery(mapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, dict):
             body_value = body_fieldprops.get("value", None)
             if body_value is None:
                 raise core.IllegalArgumentException("value cannot be null")
 
-            lookup_values = fieldmapper.map(body_fieldprops)
-            return TermQuery(fieldname, fieldmapper, next(iter(lookup_values)))
+            lookup_values = mapper.map(body_fieldprops)
+            return TermQuery(mapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, list):
             raise core.ParsingException(
@@ -437,15 +437,13 @@ class TermQuery(LeafQuery):
 class PrefixQuery(LeafQuery):
     def __init__(
         self,
-        fieldname: str,
-        fieldmapper: core.Mapper,
+        mapper: core.Mapper,
         lookup_value: core.Value,
         boost: float = 1.0,
         case_insensitive: bool = False,
     ) -> None:
         super().__init__()
-        self.fieldname = fieldname
-        self.fieldmapper = fieldmapper
+        self.mapper = mapper
         self.lookup_value = lookup_value
         self.boost = boost
         self.case_insensitive = case_insensitive
@@ -454,11 +452,13 @@ class PrefixQuery(LeafQuery):
         return 1.0
 
     def match(self, document: core.Document) -> bool:
-        stored_body = core.read_from_document(self.fieldname, document, None)
+        stored_body = core.read_from_document(
+            self.mapper.sourcepath, document, None
+        )
         if stored_body is None:
             return False
 
-        for stored_value in self.fieldmapper.map(stored_body):
+        for stored_value in self.mapper.map(stored_body):
             stored_value = typing.cast(core.Keyword, stored_value)
             if stored_value.startswith(
                 typing.cast(core.Keyword, self.lookup_value)
@@ -492,30 +492,26 @@ class PrefixQuery(LeafQuery):
                 "fieldName must not be null or empty"
             )
 
-        fieldname, body_fieldprops = next(iter(body_fields.items()))
+        mapperpath, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapper = context.mappers.get(fieldname)
+        mapper = context.mappers.get(mapperpath)
 
-        if fieldmapper.type not in ["keyword"]:
+        if mapper.type not in ["keyword"]:
             raise QueryShardException(
-                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [range] query"
+                f"Field [{mapperpath}] is of unsupported type [{mapper.type}] for [range] query"
             )
 
         if isinstance(body_fieldprops, str):
-            lookup_values = fieldmapper.map(body_fieldprops)
-            return PrefixQuery(
-                fieldname, fieldmapper, next(iter(lookup_values))
-            )
+            lookup_values = mapper.map(body_fieldprops)
+            return PrefixQuery(mapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, dict):
             body_value = body_fieldprops.get("value", None)
             if body_value is None:
                 raise core.IllegalArgumentException("value cannot be null")
 
-            lookup_values = fieldmapper.map(body_fieldprops)
-            return PrefixQuery(
-                fieldname, fieldmapper, next(iter(lookup_values))
-            )
+            lookup_values = mapper.map(body_fieldprops)
+            return PrefixQuery(mapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, list):
             raise core.ParsingException(
@@ -541,8 +537,7 @@ class RangeQuery(LeafQuery):
 
     def __init__(
         self,
-        fieldname: str,
-        fieldmapper: typing.Union[
+        mapper: typing.Union[
             core.LongMapper,
             core.FloatMapper,
             core.DoubleMapper,
@@ -555,8 +550,7 @@ class RangeQuery(LeafQuery):
         relation: Relation = Relation.INTERSECTS,
         boost: float = 1.0,
     ) -> None:
-        self.fieldname = fieldname
-        self.fieldmapper = fieldmapper
+        self.mapper = mapper
         self.gte = gte
         self.gt = gt
         self.lt = lt
@@ -568,11 +562,13 @@ class RangeQuery(LeafQuery):
         return 1.0
 
     def match(self, document: core.Document) -> bool:
-        stored_body = core.read_from_document(self.fieldname, document, None)
+        stored_body = core.read_from_document(
+            self.mapper.sourcepath, document, None
+        )
         if stored_body is None:
             return False
 
-        for stored_value in self.fieldmapper.map(stored_body):
+        for stored_value in self.mapper.map(stored_body):
 
             satisfied = True
             if self.gte is not None:
@@ -614,18 +610,18 @@ class RangeQuery(LeafQuery):
                 "fieldName must not be null or empty"
             )
 
-        fieldname, body_fieldprops = next(iter(body_fields.items()))
+        mapperpath, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapper = context.mappers.get(fieldname)
+        mapper = context.mappers.get(mapperpath)
 
-        if fieldmapper.type not in [
+        if mapper.type not in [
             "long",
             "float",
             "boolean",
             "date",
         ]:
             raise QueryShardException(
-                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [range] query"
+                f"Field [{mapperpath}] is of unsupported type [{mapper.type}] for [range] query"
             )
 
         body_gte = body_fieldprops.get("gte", None)
@@ -637,10 +633,10 @@ class RangeQuery(LeafQuery):
         gt: RangeQueryValue = None
         lt: RangeQueryValue = None
         lte: RangeQueryValue = None
-        if fieldmapper.type == "date":
-            assert isinstance(fieldmapper, core.DateMapper)
+        if mapper.type == "date":
+            assert isinstance(mapper, core.DateMapper)
 
-            body_format = body_fieldprops.get("format", fieldmapper.format)
+            body_format = body_fieldprops.get("format", mapper.format)
             if isinstance(body_gte, str):
                 if core.Date.match_date_math_pattern(body_gte):
                     gte = core.Date.parse_date_math(body_gte)
@@ -664,21 +660,21 @@ class RangeQuery(LeafQuery):
 
         else:  # No date
             assert isinstance(
-                fieldmapper,
+                mapper,
                 (core.LongMapper, core.FloatMapper, core.DoubleMapper),
             )
 
             parser: typing.Callable[
                 [typing.Any], typing.Union[core.Long, core.Float, core.Double]
             ]
-            if fieldmapper.type == "long":
+            if mapper.type == "long":
                 parser = core.Long.parse_single
-            elif fieldmapper.type == "float":
+            elif mapper.type == "float":
                 parser = core.Float.parse_single
-            elif fieldmapper.type == "double":
+            elif mapper.type == "double":
                 parser = core.Double.parse_single
             else:
-                raise NotImplementedError(fieldmapper.type)
+                raise NotImplementedError(mapper.type)
 
             if body_gte is not None and gte is None:
                 gte = parser(body_gte)
@@ -689,7 +685,7 @@ class RangeQuery(LeafQuery):
             if body_lt is not None and lt is None:
                 lte = parser(body_lte)
 
-        return RangeQuery(fieldname, fieldmapper, gte, gt, lt, lte)
+        return RangeQuery(mapper, gte, gt, lt, lte)
 
 
 class GeoshapeQuery(LeafQuery):
@@ -699,14 +695,12 @@ class GeoshapeQuery(LeafQuery):
 
     def __init__(
         self,
-        fieldname: str,
-        fieldmapper: core.GeoshapeMapper,
+        mapper: core.GeoshapeMapper,
         shape: core.Geoshape,
         relation: Relation,
     ) -> None:
         super().__init__()
-        self.fieldname = fieldname
-        self.fieldmapper = fieldmapper
+        self.mapper = mapper
         self.shape = shape
         self.relation = relation
 
@@ -714,11 +708,13 @@ class GeoshapeQuery(LeafQuery):
         return 1.0
 
     def match(self, document: core.Document) -> bool:
-        stored_body = core.read_from_document(self.fieldname, document, None)
+        stored_body = core.read_from_document(
+            self.mapper.sourcepath, document, None
+        )
         if stored_body is None:
             return False
 
-        for stored_value in self.fieldmapper.map(stored_body):
+        for stored_value in self.mapper.map(stored_body):
             stored_value = typing.cast(core.Geoshape, stored_value)
 
             if self.relation == GeoshapeQuery.Relation.INTERSECTS:
@@ -760,13 +756,13 @@ class GeoshapeQuery(LeafQuery):
                 "fieldName must not be null or empty"
             )
 
-        fieldname, body_fieldprops = next(iter(body_fields.items()))
+        mapperpath, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapper = context.mappers.get(fieldname)
+        mapper = context.mappers.get(mapperpath)
 
-        if fieldmapper.type not in ["geo_shape"]:
+        if mapper.type not in ["geo_shape"]:
             raise QueryShardException(
-                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [geo_shape] query"
+                f"Field [{mapperpath}] is of unsupported type [{mapper.type}] for [geo_shape] query"
             )
 
         if (
@@ -785,8 +781,8 @@ class GeoshapeQuery(LeafQuery):
             shape = core.Geoshape.parse_single(body_fieldprops["shape"])
             relation = GeoshapeQuery.Relation(body_relation)
 
-            assert isinstance(fieldmapper, core.GeoshapeMapper)
-            return GeoshapeQuery(fieldname, fieldmapper, shape, relation)
+            assert isinstance(mapper, core.GeoshapeMapper)
+            return GeoshapeQuery(mapper, shape, relation)
         elif "indexedShapeId" in body_fieldprops:
             raise NotImplementedError("indexedShapeId")
         else:
@@ -798,15 +794,13 @@ class GeoshapeQuery(LeafQuery):
 class GeodistanceQuery(LeafQuery):
     def __init__(
         self,
-        fieldname: str,
-        fieldmapper: core.GeopointMapper,
+        mapper: core.GeopointMapper,
         distance: core.Geodistance,
         value: core.Geopoint,
         distance_type: core.Geopoint.DistanceType,
     ) -> None:
         super().__init__()
-        self.fieldname = fieldname
-        self.fieldmapper = fieldmapper
+        self.mapper = mapper
         self.distance = distance
         self.value = value
         self.distance_type = distance_type
@@ -815,11 +809,13 @@ class GeodistanceQuery(LeafQuery):
         return 1.0
 
     def match(self, document: core.Document) -> bool:
-        stored_body = core.read_from_document(self.fieldname, document, None)
+        stored_body = core.read_from_document(
+            self.mapper.sourcepath, document, None
+        )
         if stored_body is None:
             return False
 
-        for stored_value in self.fieldmapper.map(stored_body):
+        for stored_value in self.mapper.map(stored_body):
             distance = stored_value.distance(self.value, self.distance_type)
             if distance <= self.distance:
                 return True
@@ -852,14 +848,14 @@ class GeodistanceQuery(LeafQuery):
                 "fieldName must not be null or empty"
             )
 
-        fieldname, body_fieldprops = next(iter(body_fields.items()))
+        mapperpath, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapper = context.mappers.get(fieldname)
+        mapper = context.mappers.get(mapperpath)
 
-        if fieldmapper.type not in ["geo_point"]:
+        if mapper.type not in ["geo_point"]:
             raise QueryShardException(
-                f"Field [{fieldname}] is of unsupported type "
-                f"[{fieldmapper.type}] for [geo_shape] query"
+                f"Field [{mapperpath}] is of unsupported type "
+                f"[{mapper.type}] for [geo_shape] query"
             )
 
         body_distance = body_params["distance"]
@@ -871,33 +867,31 @@ class GeodistanceQuery(LeafQuery):
         distance_type = core.Geopoint.DistanceType[body_distance_type]
         point = core.Geopoint.parse_single(body_fieldprops)
 
-        assert isinstance(fieldmapper, core.GeopointMapper)
-        return GeodistanceQuery(
-            fieldname, fieldmapper, distance, point, distance_type
-        )
+        assert isinstance(mapper, core.GeopointMapper)
+        return GeodistanceQuery(mapper, distance, point, distance_type)
 
 
 class MatchTermQuery(LeafQuery):
     def __init__(
         self,
-        fieldname: str,
-        fieldmapper: core.TextMapper,
+        mapper: core.TextMapper,
         lookup_word: str,
     ) -> None:
         super().__init__()
-        self.fieldname = fieldname
-        self.fieldmapper = fieldmapper
+        self.mapper = mapper
         self.lookup_word = lookup_word
 
     def score(self, document: core.Document) -> float:
         return 1.0
 
     def match(self, document: core.Document) -> bool:
-        stored_body = core.read_from_document(self.fieldname, document, None)
+        stored_body = core.read_from_document(
+            self.mapper.sourcepath, document, None
+        )
         if stored_body is None:
             return False
 
-        for stored_value in self.fieldmapper.map(stored_body):
+        for stored_value in self.mapper.map(stored_body):
             assert isinstance(stored_value, core.Text)
             if self.lookup_word in stored_value:
                 return True
@@ -908,24 +902,24 @@ class MatchTermQuery(LeafQuery):
 class MatchPrefixQuery(LeafQuery):
     def __init__(
         self,
-        fieldname: str,
-        fieldmapper: core.TextMapper,
+        mapper: core.TextMapper,
         lookup_word: str,
     ) -> None:
         super().__init__()
-        self.fieldname = fieldname
-        self.fieldmapper = fieldmapper
+        self.mapper = mapper
         self.lookup_word = lookup_word
 
     def score(self, document: core.Document) -> float:
         return 1.0
 
     def match(self, document: core.Document) -> bool:
-        stored_body = core.read_from_document(self.fieldname, document, None)
+        stored_body = core.read_from_document(
+            self.mapper.sourcepath, document, None
+        )
         if stored_body is None:
             return False
 
-        for stored_value in self.fieldmapper.map(stored_body):
+        for stored_value in self.mapper.map(stored_body):
             assert isinstance(stored_value, core.Text)
             if any(
                 token.startswith(self.lookup_word) for token in stored_value
@@ -938,20 +932,15 @@ class MatchPrefixQuery(LeafQuery):
 class MatchQuery(LeafQuery):
     def __init__(
         self,
-        fieldname: str,
-        fieldmapper: core.TextMapper,
+        mapper: core.TextMapper,
         lookup_value: core.Text,
     ) -> None:
         super().__init__()
-        self.fieldname = fieldname
-        self.fieldmapper = fieldmapper
+        self.mapper = mapper
         self.lookup_value = lookup_value
 
         self.bool_query = BooleanQuery(
-            should=[
-                MatchTermQuery(self.fieldname, self.fieldmapper, w)
-                for w in self.lookup_value
-            ]
+            should=[MatchTermQuery(self.mapper, w) for w in self.lookup_value]
         )
 
     def score(self, document: core.Document) -> float:
@@ -976,22 +965,20 @@ class MatchQuery(LeafQuery):
                 f"found [{field1}] and [{field2}]"
             )
 
-        fieldname, body_fieldprops = next(iter(body_fields.items()))
+        mapperpath, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapper = context.mappers.get(fieldname)
+        mapper = context.mappers.get(mapperpath)
 
-        if fieldmapper.type not in ["text"]:
+        if mapper.type not in ["text"]:
             raise QueryShardException(
-                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [match] query"
+                f"Field [{mapperpath}] is of unsupported type [{mapper.type}] for [match] query"
             )
 
-        assert isinstance(fieldmapper, core.TextMapper)
+        assert isinstance(mapper, core.TextMapper)
 
         if isinstance(body_fieldprops, str):
-            lookup_values = fieldmapper.map(body_fieldprops)
-            return MatchQuery(
-                fieldname, fieldmapper, next(iter(lookup_values))
-            )
+            lookup_values = mapper.map(body_fieldprops)
+            return MatchQuery(mapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, dict):
             body_fieldprops_unrecognized = {
@@ -1020,11 +1007,9 @@ class MatchQuery(LeafQuery):
                     f"query does not support [{first_param}]"
                 )
 
-            lookup_values = fieldmapper.map(body_fieldprops["query"])
+            lookup_values = mapper.map(body_fieldprops["query"])
 
-            return MatchQuery(
-                fieldname, fieldmapper, next(iter(lookup_values))
-            )
+            return MatchQuery(mapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, list):
             raise core.ParsingException(
@@ -1040,25 +1025,18 @@ class MatchQuery(LeafQuery):
 class MatchBoolPrefixQuery(LeafQuery):
     def __init__(
         self,
-        fieldname: str,
-        fieldmapper: core.TextMapper,
+        mapper: core.TextMapper,
         lookup_value: core.Text,
     ) -> None:
         super().__init__()
-        self.fieldname = fieldname
-        self.fieldmapper = fieldmapper
+        self.mapper = mapper
         self.lookup_value = lookup_value
 
         lookup_values = list(self.lookup_value)
         self.bool_query = BooleanQuery(
             should=[
-                *[
-                    MatchTermQuery(self.fieldname, self.fieldmapper, w)
-                    for w in lookup_values[:-1]
-                ],
-                MatchPrefixQuery(
-                    self.fieldname, self.fieldmapper, lookup_values[-1]
-                ),
+                *[MatchTermQuery(self.mapper, w) for w in lookup_values[:-1]],
+                MatchPrefixQuery(self.mapper, lookup_values[-1]),
             ]
         )
 
@@ -1084,22 +1062,20 @@ class MatchBoolPrefixQuery(LeafQuery):
                 f"found [{field1}] and [{field2}]"
             )
 
-        fieldname, body_fieldprops = next(iter(body_fields.items()))
+        mapperpath, body_fieldprops = next(iter(body_fields.items()))
 
-        fieldmapper = context.mappers.get(fieldname)
+        mapper = context.mappers.get(mapperpath)
 
-        if fieldmapper.type not in ["text"]:
+        if mapper.type not in ["text"]:
             raise QueryShardException(
-                f"Field [{fieldname}] is of unsupported type [{fieldmapper.type}] for [match bool prefix] query"
+                f"Field [{mapperpath}] is of unsupported type [{mapper.type}] for [match bool prefix] query"
             )
 
-        assert isinstance(fieldmapper, core.TextMapper)
+        assert isinstance(mapper, core.TextMapper)
 
         if isinstance(body_fieldprops, str):
-            lookup_values = fieldmapper.map(body_fieldprops)
-            return MatchBoolPrefixQuery(
-                fieldname, fieldmapper, next(iter(lookup_values))
-            )
+            lookup_values = mapper.map(body_fieldprops)
+            return MatchBoolPrefixQuery(mapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, dict):
             body_fieldprops_unrecognized = {
@@ -1118,11 +1094,9 @@ class MatchBoolPrefixQuery(LeafQuery):
                     f"query does not support [{first_param}]"
                 )
 
-            lookup_values = fieldmapper.map(body_fieldprops["query"])
+            lookup_values = mapper.map(body_fieldprops["query"])
 
-            return MatchBoolPrefixQuery(
-                fieldname, fieldmapper, next(iter(lookup_values))
-            )
+            return MatchBoolPrefixQuery(mapper, next(iter(lookup_values)))
 
         elif isinstance(body_fieldprops, list):
             raise core.ParsingException(
