@@ -89,6 +89,7 @@ def transpose_date_format(format: str) -> str:
         "YY": "%y",
         "yy": "%y",
         "MM": "%m",
+        "DDD": "%j",
         "dd": "%d",
         "HH": "%H",
         "mm": "%M",

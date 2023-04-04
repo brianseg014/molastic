@@ -1461,9 +1461,9 @@ class Date(Value):
         formats = []
 
         for f in format.split("||"):
-            f_upper = f.upper()
+            f_lower = f.lower()
 
-            if f_upper == "DATE_OPTIONAL_TIME":
+            if f_lower == "date_optional_time":
                 formats.extend(
                     [
                         "yyyy-MM-dd",
@@ -1472,19 +1472,79 @@ class Date(Value):
                         "yy-MM-dd'T'HH:mm::ss.SSSZ",
                     ]
                 )
-            elif f_upper == "STRICT_DATE_OPTIONAL_TIME":
+            elif f_lower == "strict_date_optional_time":
                 formats.extend(["yyyy-MM-dd", "yyyy-MM-dd'T'HH:mm::ss.SSSZ"])
-            elif f_upper == "STRICT_DATE_OPTIONAL_TIME_NANOS":
+            elif f_lower == "strict_date_optional_time_nanos":
                 formats.extend(
                     ["yyyy-MM-dd", "yyyy-MM-dd'T'HH:mm::ss.SSSSSSZ"]
                 )
-            elif f_upper == "BASIC_DATE":
+            elif f_lower == "basic_date":
                 formats.extend(["yyyyMMdd"])
-            elif f_upper == "BASIC_DATE_TIME":
+            elif f_lower == "basic_date_time":
                 formats.extend(["yyyyMMdd'T'HHmmss.SSSZ"])
-            elif f_upper == "BASIC_DATE_TIME_NO_MILLIS":
+            elif f_lower == "basic_date_time_no_millis":
                 formats.extend(["yyyyMMdd'T'HHmmssZ"])
-            elif f_upper == "DATE":
+            elif f_lower == "basic_ordinal_date":
+                formats.extend(["yyyyDDD"])
+            elif f_lower == "basic_ordinal_date_time":
+                formats.extend(["yyyyDDD'T'HHmmss.SSSZ"])
+            elif f_lower == "basic_ordinal_date_time_no_millis":
+                formats.extend(["yyyyDDD'T'HHmmssZ"])
+            elif f_lower == "basic_time":
+                formats.extend(["HHmmss.SSSZ"])
+            elif f_lower == "basic_time_no_millis":
+                formats.extend(["HHmmssZ"])
+            elif f_lower == "basic_t_time":
+                formats.extend(["'T'HHmmss.SSSZ"])
+            elif f_lower == "basic_t_time_no_millis":
+                formats.extend(["'T'HHmmssZ"])
+            elif f_lower == "date":
+                formats.extend(["yy-MM-dd", "yyyy-MM-dd"])
+            elif f_lower == "strict_date":
+                formats.extend(["yyyy-MM-dd"])
+            elif f_lower == "strict_date_hour":
+                formats.extend(["yyyy-MM-dd'T'HH"])
+            elif f_lower == "strict_date_hour_minute":
+                formats.extend(["yyyy-MM-dd'T'HH:mm"])
+            elif f_lower == "strict_date_hour_minute_second":
+                formats.extend(["yyyy-MM-dd'T'HH:mm:ss"])
+            elif f_lower == "strict_date_hour_minute_second_fraction":
+                formats.extend(["yyyy-MM-dd'T'HH:mm:ss.SSS"])
+            elif f_lower == "strict_date_hour_minute_second_millis":
+                formats.extend(["yyyy-MM-dd'T'HH:mm:ss.SSS"])
+            elif f_lower == "strict_date_time":
+                formats.extend(["yyyy-MM-dd'T'HH:mm:ss.SSSZ"])
+            elif f_lower == "strict_date_time_no_millis":
+                formats.extend(["yyyy-MM-dd'T'HH:mm:ssZ"])
+            elif f_lower == "strict_hour":
+                formats.extend(["HH"])
+            elif f_lower == "strict_hour_minute":
+                formats.extend(["HH:mm"])
+            elif f_lower == "strict_hour_minute_second":
+                formats.extend(["HH:mm:ss"])
+            elif f_lower == "strict_hour_minute_second_fraction":
+                formats.extend(["HH:mm:ss.SSS"])
+            elif f_lower == "strict_hour_minute_second_millis":
+                formats.extend(["HH:mm:ss.SSS"])
+            elif f_lower == "strict_ordinal_date":
+                formats.extend(["yyyy-DDD"])
+            elif f_lower == "strict_ordinal_date_time":
+                formats.extend(["yyyy-DDD'T'HH:mm:ss.SSSZ"])
+            elif f_lower == "strict_ordinal_date_time_no_millis":
+                formats.extend(["yyyy-DDD'T'HH:mm:ssZ"])
+            elif f_lower == "strict_time":
+                formats.extend(["HH:mm:ss.SSSZ"])
+            elif f_lower == "strict_time_no_millis":
+                formats.extend(["HH:mm:ssZ"])
+            elif f_lower == "strict_t_time":
+                formats.extend(["'T'HH:mm:ss.SSSZ"])
+            elif f_lower == "strict_t_time_no_millis":
+                formats.extend(["'T'HH:mm:ssZ"])
+            elif f_lower == "strict_year":
+                formats.extend(["yyyy"])
+            elif f_lower == "strict_year_month":
+                formats.extend(["yyyy-MM"])
+            elif f_lower == "strict_year_month_day":
                 formats.extend(["yyyy-MM-dd"])
             else:
                 formats.extend([f])
@@ -1497,9 +1557,9 @@ class Date(Value):
     ) -> bool:
         "Test if value match with java date format"
         for f in cls.parse_date_format(format):
-            f_upper = f.upper()
+            f_lower = f.lower()
 
-            if f_upper == "EPOCH_MILLIS":
+            if f_lower == "epoch_millis":
                 if isinstance(value, str) and not str.isdigit(value):
                     continue
 
@@ -1509,7 +1569,7 @@ class Date(Value):
                 except ValueError:
                     pass
 
-            elif f_upper == "EPOCH_SECOND":
+            elif f_lower == "epoch_second":
                 if isinstance(value, str) and not str.isdigit(value):
                     continue
 
