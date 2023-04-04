@@ -129,7 +129,7 @@ class Document(typing.TypedDict):
 
 class DocumentList:
     @classmethod
-    def of(cls, documents: typing.Sequence[Document]) -> None:
+    def of(cls, documents: typing.Sequence[Document]) -> DocumentList:
         return DocumentList(documents)
 
     @classmethod
@@ -529,11 +529,11 @@ class DocumentIndex:
 
     @classmethod
     def empty(cls) -> DocumentIndex:
-        return Document({})
+        return DocumentIndex([])
 
     @classmethod
     def create(
-        cls, documents: typing.Sequence[Document], mappings: typing.Mapping
+        cls, documents: typing.Iterable[Document], mappings: typing.Mapping
     ) -> DocumentIndex:
         mappers = MappingsParser.parse(mappings)
 
@@ -543,7 +543,7 @@ class DocumentIndex:
                 DocumentIndex.DocumentIndexed(
                     _id=document["_id"],
                     fields=[
-                        DocumentIndex.FieldIndexed(fieldpath, value)
+                        DocumentIndex.FieldIndexed(fieldpath, list(value))
                         for mapper in mappers
                         for fieldpath, value in mapper.map_document(
                             document
@@ -752,20 +752,6 @@ class TextMapper(Mapper):
         super().__init__(sourcepath, targetpath, type, fields)
         self.analyzer = analyzer
 
-    @property
-    def analyzer(self) -> analysis.Analyzer:
-        return self._analyzer
-
-    @analyzer.setter
-    def analyzer(self, analyzer: str):
-        self._analyzer = self.create_analyzer(analyzer)
-
-    def create_analyzer(self, analyzer: str) -> analysis.Analyzer:
-        if analyzer == "standard":
-            return self.default_analyzer
-        else:
-            raise NotImplementedError(f"analyzer: {analyzer}")
-
     def map_document(
         self, document: Document
     ) -> typing.Dict[str, typing.Iterable[Value]]:
@@ -792,20 +778,6 @@ class SearchAsYouTypeMapper(Mapper):
     ) -> None:
         super().__init__(sourcepath, targetpath, type, fields)
         self.analyzer = analyzer
-
-    @property
-    def analyzer(self) -> analysis.Analyzer:
-        return self._analyzer
-
-    @analyzer.setter
-    def analyzer(self, analyzer: str):
-        self._analyzer = self.create_analyzer(analyzer)
-
-    def create_analyzer(self, analyzer: str) -> analysis.Analyzer:
-        if analyzer == "standard":
-            return self.default_analyzer
-        else:
-            raise NotImplementedError(f"analyzer: {analyzer}")
 
     def can_map(self, fieldpath: str) -> bool:
         return fieldpath in [
@@ -901,8 +873,10 @@ class DynamicMapping:
         self.dynamic_date_formats = dynamic_date_formats
         self.numeric_detection = numeric_detection
 
-    def map_source(self, source: dict) -> None:
-        dicttree = lambda: collections.defaultdict(dicttree)
+    def map_source(self, source: dict) -> typing.Mapping:
+        dicttree: typing.Callable[
+            [], typing.DefaultDict
+        ] = lambda: collections.defaultdict(dicttree)
 
         mappings = dicttree()
 
@@ -1011,7 +985,9 @@ class MappingsMerger:
         mapping2: typing.Mapping,
         dynamic: bool = False,
     ) -> typing.Mapping:
-        dicttree = lambda: collections.defaultdict(dicttree)
+        dicttree: typing.Callable[
+            [], typing.DefaultDict
+        ] = lambda: collections.defaultdict(dicttree)
 
         mappings = dicttree()
 
@@ -1463,7 +1439,9 @@ class Date(Value):
         else:
             return f"Date('{self.value}', '{self.format}')"
 
-    def __eq__(self, __o: Date) -> bool:
+    def __eq__(self, __o) -> bool:
+        if not isinstance(__o, Date):
+            return False
         return self.datetime == __o.datetime
 
     def __ge__(self, __o: Date) -> bool:

@@ -27,28 +27,14 @@ def search(
     hits: typing.List[Hit] = []
 
     for indice in indices:
-        hits.extend(run(body, indice))
+        if "query" in body:
+            query = parse_compound_and_leaf_query(body["query"])
+        else:
+            query = MatchAllQuery()
+
+        hits.extend(query.match(Context(indice)))
 
     return hits
-
-
-def run(body: dict, indice: core.Indice) -> typing.Sequence[Hit]:
-    if "query" in body:
-        query = parse_compound_and_leaf_query(body["query"])
-    else:
-        query = MatchAllQuery()
-
-    return query.match(Context(indice))
-
-
-def parse(body: dict, context):
-    if "query" in body:
-        query = SimpleQuery(
-            parse_compound_and_leaf_query(body["query"], context)
-        )
-    else:
-        query = SimpleQuery(MatchAllQuery())
-    return QueryDSL(query)
 
 
 def parse_compound_and_leaf_query(
@@ -98,28 +84,6 @@ class QueryShardException(core.ElasticError):
     pass
 
 
-class QueryDSL:
-    def __init__(self, query: SimpleQuery) -> None:
-        self.query = query
-
-    def run(
-        self, documents: typing.Iterable[core.Document]
-    ) -> typing.Iterable[Hit]:
-
-        hits = tuple(d for d in documents if self.query.match(d))
-
-        return (
-            Hit(
-                _index=d["_index"]._id,
-                _id=d["_id"],
-                _score=0.0,
-                _source=d["_source"],
-                fields=None,
-            )
-            for d in hits
-        )
-
-
 class Context:
     def __init__(self, indice: core.Indice):
         self.indice = indice
@@ -161,29 +125,12 @@ class Query(abc.ABC):
         )
 
 
-class SimpleQuery(Query):
-    def __init__(self, query: typing.Union[CompoundQuery, LeafQuery]) -> None:
-        super().__init__()
-        self.query = query
-
-    def score(self, document: core.Document) -> float:
-        return 1.0
-
-    def match(self, document: core.Document) -> bool:
-        return self.query.match(document)
-
-
 class LeafQuery(Query):
     pass
 
 
 class CompoundQuery(Query):
     pass
-
-
-BoolOccurType = typing.Optional[
-    typing.Sequence[typing.Union[CompoundQuery, LeafQuery]]
-]
 
 
 class BooleanQuery(CompoundQuery):
@@ -228,10 +175,10 @@ class BooleanQuery(CompoundQuery):
 
     def __init__(
         self,
-        must: BoolOccurType = [],
-        filter: BoolOccurType = [],
-        should: BoolOccurType = [],
-        must_not: BoolOccurType = [],
+        must: typing.Sequence[typing.Union[CompoundQuery, LeafQuery]] = [],
+        filter: typing.Sequence[typing.Union[CompoundQuery, LeafQuery]] = [],
+        should: typing.Sequence[typing.Union[CompoundQuery, LeafQuery]] = [],
+        must_not: typing.Sequence[typing.Union[CompoundQuery, LeafQuery]] = [],
         minimum_should_match: typing.Optional[int] = None,
         boost: float = 1.0,
     ) -> None:
@@ -300,21 +247,6 @@ class BooleanQuery(CompoundQuery):
             hits.append(hit)
 
         return hits
-
-        must = sum(1 for q in self.must if q.match(document))
-        filter = sum(1 for q in self.filter if q.match(document))
-        should = sum(1 for q in self.should if q.match(document))
-        must_not = sum(1 for q in self.must_not if not q.match(document))
-
-        matched = True
-        matched = matched and must == len(self.must)
-        matched = matched and filter == len(self.filter)
-        matched = matched and self.minimum_should_match.match(
-            should, len(self.should)
-        )
-        matched = matched and must_not == len(self.must_not)
-
-        return matched
 
     @classmethod
     def parse(self, body: dict) -> BooleanQuery:
@@ -391,7 +323,7 @@ class DisjuntionMaxQuery(CompoundQuery):
         return hits
 
     @classmethod
-    def parse(self, body: dict, context: core.Indice) -> DisjuntionMaxQuery:
+    def parse(self, body: dict) -> DisjuntionMaxQuery:
         not_recognized = {
             k: v
             for k, v in body.items()
@@ -410,7 +342,7 @@ class DisjuntionMaxQuery(CompoundQuery):
         return DisjuntionMaxQuery(
             queries=tuple(
                 [
-                    parse_compound_and_leaf_query(q, context)
+                    parse_compound_and_leaf_query(q)
                     for q in body.get("queries", [])
                 ]
             ),
@@ -427,7 +359,7 @@ class TermQuery(LeafQuery):
     def __init__(
         self,
         fieldpath: str,
-        value: typing.Mapping,
+        value: str,
         boost: float = 1.0,
         case_insensitive: bool = False,
     ) -> None:
@@ -515,7 +447,7 @@ class PrefixQuery(LeafQuery):
     def __init__(
         self,
         fieldpath: str,
-        value: typing.Mapping,
+        value: str,
         boost: float = 1.0,
         case_insensitive: bool = False,
     ) -> None:
@@ -997,6 +929,7 @@ class MatchQuery(LeafQuery):
             )
 
         query = next(v for v in mapper.map_value(self.query))
+        assert isinstance(query, core.Text)
 
         self.bool_query = BooleanQuery(
             should=[_MatchTermQuery(self.fieldpath, w) for w in query]
