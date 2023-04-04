@@ -733,7 +733,7 @@ class DateMapper(Mapper):
 
     def map_value(self, body) -> typing.Iterable[Value]:
         if isinstance(body, str) and Date.match_date_math_pattern(body):
-            return Date.parse_date_math(body)
+            return [Date.parse_date_math(body)]
         else:
             return Date.parse(body, self.format)
 
@@ -1437,7 +1437,7 @@ class Date(Value):
         r"^now((?P<delta_measure>[-+]\d+)(?P<delta_unit>[yMwdhHms]))?(/(?P<round_unit>[yMwdhHms]))?$"
     )
     ANCHOR_PATTERN = re.compile(
-        r"^(?P<anchor>\w+)\|\|((?P<delta_measure>[-+]\d+)(?P<delta_unit>[yMwdhHms]))?(/(?P<round_unit>[yMwdhHms]))?$"
+        r"^(?P<anchor>.+)\|\|((?P<delta_measure>[-+]\d+)(?P<delta_unit>[yMwdhHms]))?(/(?P<round_unit>[yMwdhHms]))?$"
     )
 
     def __init__(

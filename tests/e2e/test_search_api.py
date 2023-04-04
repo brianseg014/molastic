@@ -351,6 +351,25 @@ def test_search_range():
     assert response.status_code == 200
     assert response.json()["hits"]["total"]["value"] == 1
 
+    search_url = furl.furl(str(url), path=url.path).add(path="_search")
+    response = requests.get(
+        str(search_url),
+        json={
+            "query": {
+                "range": {
+                    "field_date": {
+                        "gt": "2019.01.01||-1d",
+                        "gte": "2022-01-01",
+                        "lt": "now+1y",
+                        "lte": "2022-01-01",
+                    }
+                }
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["hits"]["total"]["value"] == 1
+
 
 @mock_elasticsearch("mock://molastic")
 def test_search_geodistance():
