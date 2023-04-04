@@ -127,6 +127,36 @@ class Document(typing.TypedDict):
     _stored_fields: dict
 
 
+class DocumentList:
+    @classmethod
+    def of(cls, documents: typing.Sequence[Document]) -> None:
+        return DocumentList(documents)
+
+    @classmethod
+    def empty(cls) -> DocumentList:
+        return DocumentList.of([])
+
+    def __init__(self, documents: typing.Sequence[Document]) -> None:
+        self.documents = documents
+
+    def __iter__(self):
+        return iter(self.documents)
+
+    def has(self, _id: str) -> bool:
+        return any(d["_id"] == _id for d in self.documents)
+
+    def get(self, _id: str) -> typing.Optional[Document]:
+        return next((d for d in self.documents if d["_id"] == _id), None)
+
+    def upsert(self, document: Document) -> DocumentList:
+        documents = [d for d in self.documents if d["_id"] != document["_id"]]
+
+        return DocumentList.of(documents + [document])
+
+    def remove(self, _id: str) -> DocumentList:
+        return DocumentList.of([d for d in self.documents if d["_id"] != _id])
+
+
 class ElasticEngine:
     def __init__(self) -> None:
         self._resources: typing.Dict[str, Indice] = {}
@@ -226,18 +256,13 @@ class Indice:
                 "provided_name": self._id,
             }
         }
-        self.documents_by_id: typing.Dict[str, Document] = {}
+
+        self.documents: DocumentList = DocumentList.empty()
+
+        self.indexes: DocumentIndex = DocumentIndex.empty()
 
         if mappings:
             self.update_mappings(mappings)
-
-    @property
-    def mappers(self) -> typing.Dict[str, Mapper]:
-        return MappingsParser.parse(self.mappings)
-
-    @property
-    def documents(self) -> typing.Sequence[Document]:
-        return tuple(self.documents_by_id.values())
 
     def update_mappings(self, mappings: typing.Mapping):
         self.mappings = MappingsMerger.merge(
@@ -269,7 +294,7 @@ class Indice:
             raise ElasticError("document already exists")
 
         _version: int = 1
-        _stored_document = self.documents_by_id.get(id, None)
+        _stored_document = self.get(id)
 
         if _stored_document is not None:
             _version = _stored_document["_version"] + 1
@@ -294,7 +319,19 @@ class Indice:
             _stored_fields={},
         )
 
-        self.make_searchable(_document)
+        # Update index mappings by dynamic mapping
+        dynamic_mapping = DynamicMapping()
+        mappings = dynamic_mapping.map_source(_document["_source"])
+
+        self.mappings = MappingsMerger.merge(
+            mapping1=self.mappings, mapping2=mappings, dynamic=True
+        )
+
+        # Add to general documents
+        self.documents = self.documents.upsert(_document)
+
+        # Rebuild indexes
+        self.indexes = DocumentIndex.create(self.documents, self.mappings)
 
         if not exists:
             operation_result = OperationResult.CREATED
@@ -303,8 +340,8 @@ class Indice:
 
         return _document, operation_result
 
-    def get(self, id: str) -> typing.Optional[Document]:
-        return self.documents_by_id.get(id, None)
+    def get(self, _id: str) -> typing.Optional[Document]:
+        return self.documents.get(_id)
 
     def delete(
         self,
@@ -317,11 +354,16 @@ class Indice:
         version_type: typing.Optional[VersionType] = None,
         wait_for_active_shards: str = "1",
     ) -> typing.Tuple[typing.Optional[Document], OperationResult]:
-        _stored_document = self.documents_by_id.get(id, None)
-        if _stored_document is None:
+        if not self.documents.has(id):
             return None, OperationResult.NOT_FOUND
 
-        self.documents_by_id.pop(id)
+        _stored_document = self.documents.get(id)
+
+        # Remove from general documents
+        self.documents = self.documents.remove(id)
+
+        # Rebuild indexes
+        self.indexes = DocumentIndex.create(self.documents, self.mappings)
 
         return _stored_document, OperationResult.DELETED
 
@@ -345,7 +387,7 @@ class Indice:
 
         _version: int = 1
 
-        _stored_document = self.documents_by_id.get(id, None)
+        _stored_document = self.documents.get(id)
 
         exists = False
         if _stored_document is not None:
@@ -394,7 +436,19 @@ class Indice:
             _stored_fields={},
         )
 
-        self.make_searchable(_document)
+        # Update index mappings by dynamic mapping
+        dynamic_mapping = DynamicMapping()
+        mappings = dynamic_mapping.map_source(_document["_source"])
+
+        self.mappings = MappingsMerger.merge(
+            mapping1=self.mappings, mapping2=mappings, dynamic=True
+        )
+
+        # Add to general documents
+        self.documents = self.documents.upsert(_document)
+
+        # Rebuild indexes
+        self.indexes = DocumentIndex.create(self.documents, self.mappings)
 
         if not exists:
             operation_result = OperationResult.CREATED
@@ -416,48 +470,115 @@ class Indice:
         raise NotImplementedError()
 
     def exists(self, _id: str) -> bool:
-        return _id in self.documents_by_id
+        return self.documents.has(_id)
 
     def create_document_id(self) -> str:
         return str(uuid.uuid4())
 
-    def make_searchable(self, document: Document):
-        dynamic_mapping = DynamicMapping()
-        mappings = dynamic_mapping.map_source(document["_source"])
 
-        self.mappings = MappingsMerger.merge(
-            mapping1=self.mappings, mapping2=mappings, dynamic=True
-        )
+class DocumentIndex:
+    class FieldIndexed:
+        def __init__(
+            self, fieldpath: str, value: typing.Sequence[Value]
+        ) -> None:
+            self.fieldpath = fieldpath
+            self.value = value
 
-        self.documents_by_id[document["_id"]] = document
+    class DocumentIndexed:
+        def __init__(
+            self, _id: str, fields: typing.Sequence[DocumentIndex.FieldIndexed]
+        ) -> None:
+            self._id = _id
+            self.fields = fields
+
+        def get(self, fieldpath: str) -> DocumentIndex.FieldIndexed:
+            return next(f for f in self.fields if f.fieldpath == fieldpath)
+
+    def __init__(
+        self, indexes: typing.Sequence[DocumentIndex.DocumentIndexed]
+    ) -> None:
+        # [doc_id][targetpath] = [value]
+        self.indexes = indexes
+
+    def __iter__(self):
+        return iter(self.indexes)
+
+    @classmethod
+    def empty(cls) -> DocumentIndex:
+        return Document({})
+
+    @classmethod
+    def create(
+        cls, documents: typing.Sequence[Document], mappings: typing.Mapping
+    ) -> DocumentIndex:
+        # Rebuild indexes
+        mappers = MappingsParser.parse(mappings)
+
+        indexes: typing.List[DocumentIndex.DocumentIndexed] = []
+        for document in documents:
+            indexes.append(
+                DocumentIndex.DocumentIndexed(
+                    _id=document["_id"],
+                    fields=[
+                        DocumentIndex.FieldIndexed(fieldpath, value)
+                        for mapper in mappers
+                        for fieldpath, value in mapper.map_document(
+                            document
+                        ).items()
+                    ],
+                )
+            )
+
+        return DocumentIndex(indexes)
 
 
 class Mapper(abc.ABC):
+    """
+    A mapper transforms a document segment into a flatten dict
+    with targetpath,[value] pairs.
+    """
+
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         fields: typing.Optional[typing.Mapping],
     ) -> None:
         self.sourcepath = sourcepath
+        self.targetpath = targetpath
         self.type = type
         self.fields = fields
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(sourcepath='{self.sourcepath}', targetpath='{self.targetpath}')"
+
     @abc.abstractmethod
-    def map(self, body) -> typing.Iterable[Value]:
-        "Create runtime value given a source body"
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
         pass
+
+    @abc.abstractmethod
+    def map_value(self, body) -> typing.Iterable[Value]:
+        pass
+
+    # @abc.abstractmethod
+    # def map(self, body) -> typing.Iterable[Value]:
+    #     "Create runtime value given a source body"
+    #     pass
 
 
 class KeywordMapper(Mapper):
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         ignore_above: int = 2147483647,
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(sourcepath, type, fields)
+        super().__init__(sourcepath, targetpath, type, fields)
         self.ignore_above = ignore_above
 
     def merge(
@@ -477,7 +598,16 @@ class KeywordMapper(Mapper):
                 )
         return mergers
 
-    def map(self, body) -> typing.Iterable[Keyword]:
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
+
+        return {self.targetpath: self.map_value(body)}
+
+    def map_value(self, body) -> typing.Iterable[Value]:
         return Keyword.parse(body)
 
 
@@ -485,10 +615,11 @@ class BooleanMapper(Mapper):
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(sourcepath, type, fields)
+        super().__init__(sourcepath, targetpath, type, fields)
 
     def merge(
         self, fieldmapping: typing.Mapping
@@ -499,7 +630,16 @@ class BooleanMapper(Mapper):
             )
         return []
 
-    def map(self, body) -> typing.Iterable[Value]:
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
+
+        return {self.targetpath: self.map_value(body)}
+
+    def map_value(self, body) -> typing.Iterable[Value]:
         return Boolean.parse(body)
 
 
@@ -507,10 +647,11 @@ class FloatMapper(Mapper):
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(sourcepath, type, fields)
+        super().__init__(sourcepath, targetpath, type, fields)
 
     def merge(
         self, fieldmapping: typing.Mapping
@@ -521,7 +662,16 @@ class FloatMapper(Mapper):
             )
         return []
 
-    def map(self, body) -> typing.Iterable[Float]:
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
+
+        return {self.targetpath: self.map_value(body)}
+
+    def map_value(self, body) -> typing.Iterable[Value]:
         return Float.parse(body)
 
 
@@ -529,10 +679,11 @@ class DoubleMapper(Mapper):
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(sourcepath, type, fields)
+        super().__init__(sourcepath, targetpath, type, fields)
 
     def merge(
         self, fieldmapping: typing.Mapping
@@ -543,7 +694,16 @@ class DoubleMapper(Mapper):
             )
         return []
 
-    def map(self, body) -> typing.Iterable[Value]:
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
+
+        return {self.targetpath: self.map_value(body)}
+
+    def map_value(self, body) -> typing.Iterable[Value]:
         return Double.parse(body)
 
 
@@ -551,10 +711,11 @@ class LongMapper(Mapper):
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(sourcepath, type, fields)
+        super().__init__(sourcepath, targetpath, type, fields)
 
     def merge(
         self, fieldmapping: typing.Mapping
@@ -565,7 +726,16 @@ class LongMapper(Mapper):
             )
         return []
 
-    def map(self, body) -> typing.Iterable[Long]:
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
+
+        return {self.targetpath: self.map_value(body)}
+
+    def map_value(self, body) -> typing.Iterable[Value]:
         return Long.parse(body)
 
 
@@ -573,11 +743,12 @@ class DateMapper(Mapper):
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         format: str = "strict_date_optional_time||epoch_millis",
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(sourcepath, type, fields)
+        super().__init__(sourcepath, targetpath, type, fields)
         self.format = format
 
     def __repr__(self):
@@ -598,18 +769,17 @@ class DateMapper(Mapper):
                 )
         return mergers
 
-    @typing.overload
-    def map(self, body) -> typing.Iterable[Date]:
-        ...
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
 
-    @typing.overload
-    def map(self, body, format: str) -> typing.Iterable[Date]:
-        ...
+        return {self.targetpath: self.map_value(body)}
 
-    def map(
-        self, body, format: typing.Optional[str] = None
-    ) -> typing.Iterable[Date]:
-        return Date.parse(body, format or self.format)
+    def map_value(self, body) -> typing.Iterable[Value]:
+        return Date.parse(body, self.format)
 
 
 class TextMapper(Mapper):
@@ -618,16 +788,13 @@ class TextMapper(Mapper):
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         analyzer: str = "standard",
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(sourcepath, type, fields)
+        super().__init__(sourcepath, targetpath, type, fields)
         self.analyzer = analyzer
-
-    # def __init__(self, fieldpath: str, type: str) -> None:
-    #     super().__init__(fieldpath, type)
-    #     self._analyzer: analysis.Analyzer = self.default_analyzer
 
     @property
     def analyzer(self) -> analysis.Analyzer:
@@ -661,28 +828,28 @@ class TextMapper(Mapper):
                 )
         return mergers
 
-    @typing.overload
-    def map(self, body) -> typing.Iterable[Text]:
-        ...
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
 
-    @typing.overload
-    def map(self, body, analyzer: analysis.Analyzer) -> typing.Iterable[Text]:
-        ...
+        return {self.targetpath: self.map_value(body)}
 
-    def map(
-        self, body, analyzer: typing.Optional[analysis.Analyzer] = None
-    ) -> typing.Iterable[Text]:
-        return Text.parse(body, analyzer or self.analyzer)
+    def map_value(self, body) -> typing.Iterable[Value]:
+        return Text.parse(body, self.default_analyzer)
 
 
 class GeopointMapper(Mapper):
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(sourcepath, type, fields)
+        super().__init__(sourcepath, targetpath, type, fields)
 
     def merge(
         self, fieldmapping: typing.Mapping
@@ -693,7 +860,16 @@ class GeopointMapper(Mapper):
             )
         return []
 
-    def map(self, body) -> typing.Iterable[Geopoint]:
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
+
+        return {self.targetpath: self.map_value(body)}
+
+    def map_value(self, body) -> typing.Iterable[Value]:
         return Geopoint.parse(body)
 
 
@@ -701,10 +877,11 @@ class GeoshapeMapper(Mapper):
     def __init__(
         self,
         sourcepath: str,
+        targetpath: str,
         type: str,
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
-        super().__init__(sourcepath, type, fields)
+        super().__init__(sourcepath, targetpath, type, fields)
 
     def merge(
         self, fieldmapping: typing.Mapping
@@ -715,7 +892,16 @@ class GeoshapeMapper(Mapper):
             )
         return []
 
-    def map(self, body) -> typing.Iterable[Geoshape]:
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
+
+        return {self.targetpath: self.map_value(body)}
+
+    def map_value(self, body) -> typing.Iterable[Value]:
         return Geoshape.parse(body)
 
 
@@ -924,7 +1110,7 @@ class MappingsParser:
     }
 
     @classmethod
-    def parse(cls, mappings: typing.Mapping) -> typing.Dict[str, Mapper]:
+    def parse(cls, mappings: typing.Mapping) -> typing.Sequence[Mapper]:
         if any(True for k in mappings.keys() if k != "properties"):
             raise MapperParsingException(
                 f"Root mapping definition has unsupported parameters: {mappings}"
@@ -932,7 +1118,7 @@ class MappingsParser:
 
         patterns = [re.compile("^properties.\\w+$")]
 
-        mappers: typing.Dict[str, Mapper] = {}
+        mappers: typing.List[Mapper] = []
         for mappingpath, mapping in utils.flatten(mappings):
             if not any(p.match(mappingpath) for p in patterns):
                 continue
@@ -965,11 +1151,9 @@ class MappingsParser:
                 )
 
             if "type" not in mapping:
-                mappers[sourcepath] = clstype(
-                    sourcepath, type="object", **mapping
-                )
+                mappers.append(clstype(sourcepath, type="object", **mapping))
             else:
-                mappers[sourcepath] = clstype(sourcepath, **mapping)
+                mappers.append(clstype(sourcepath, sourcepath, **mapping))
 
             # SUBFIELDS
             for subfield, mapping in mapping.get("fields", {}).items():
@@ -992,9 +1176,9 @@ class MappingsParser:
                         f"No handler for type [{type}] declared on field [{subfield}]"
                     )
 
-                mapper = clstype(sourcepath, **mapping)
+                targetpath = f"{sourcepath}.{subfield}"
 
-                mappers[f"{sourcepath}.{subfield}"] = mapper
+                mappers.append(clstype(sourcepath, targetpath, **mapping))
 
         return mappers
 
@@ -1508,6 +1692,11 @@ class Text(Value):
     def __iter__(self):
         yield from self.index.keys()
 
+    def __repr__(self):
+        words = ", ".join(f"'{w}'" for w in iter(self))
+
+        return f"Text(words=[{words}])"
+
     @classmethod
     def parse(cls, body, analyzer: analysis.Analyzer) -> typing.Iterable[Text]:
         return tuple(
@@ -1591,6 +1780,9 @@ class Geodistance(Value):
     def __le__(self, __o: Geodistance) -> bool:
         return self.millimeters() <= __o.millimeters()
 
+    def __repr__(self):
+        return f"Geodistance(measure={self.measure}, unit='{self.unit.value}')"
+
     @classmethod
     def parse_single(cls, body: str) -> Geodistance:
         if isinstance(body, str):
@@ -1617,6 +1809,10 @@ class Geopoint(Value):
     class DistanceType(utils.CaseInsensitveEnum):
         ARC = "ARC"
         PLANE = "PLANE"
+
+        @classmethod
+        def of(cls, distance_type: str) -> Geopoint.DistanceType:
+            return Geopoint.DistanceType[distance_type.upper()]
 
     def __init__(
         self,
@@ -1860,20 +2056,20 @@ class Scripting:
 
 
 def read_from_document(
-    fieldname: str, document: Document, _default: typing.Any = MISSING
+    sourcepath: str, document: Document, _default: typing.Any = MISSING
 ) -> typing.Any:
     try:
-        if fieldname in document:
+        if sourcepath in document:
             return _raise_if_missing(
                 _missing_if_empty_array(
-                    utils.get_from_mapping([fieldname], document)
+                    utils.get_from_mapping([sourcepath], document)
                 )
             )
 
         return _raise_if_missing(
             _missing_if_empty_array(
                 utils.get_from_mapping(
-                    fieldname.split("."), document["_source"]
+                    sourcepath.split("."), document["_source"]
                 )
             )
         )

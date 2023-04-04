@@ -365,7 +365,7 @@ def test_search_geodistance():
     doc_url = furl.furl(str(url), path=url.path).add(path="_doc")
     response = requests.post(
         str(doc_url),
-        json={"location": {"lat": 15.7199869, "lon": -91.3560172}},
+        json={"location": {"lat": 0.0, "lon": 0.0}},
     )
     assert response.status_code == 201
 
@@ -376,7 +376,7 @@ def test_search_geodistance():
             "query": {
                 "geo_distance": {
                     "distance": "2km",
-                    "location": {"lat": 15.7199869, "lon": -91.3560172},
+                    "location": {"lat": 0.0, "lon": 0.0},
                 }
             }
         },
