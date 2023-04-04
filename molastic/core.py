@@ -732,7 +732,10 @@ class DateMapper(Mapper):
         return {self.targetpath: self.map_value(body)}
 
     def map_value(self, body) -> typing.Iterable[Value]:
-        return Date.parse(body, self.format)
+        if isinstance(body, str) and Date.match_date_math_pattern(body):
+            return Date.parse_date_math(body)
+        else:
+            return Date.parse(body, self.format)
 
 
 class TextMapper(Mapper):
