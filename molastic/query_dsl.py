@@ -128,8 +128,10 @@ class Context:
     def documents(self) -> typing.Iterable[core.Document]:
         return iter(self.indice.documents)
 
-    def get_mapper_for_field(self, fieldpath: str) -> core.Mapper:
-        return next(m for m in self.mappers if m.can_map(fieldpath))
+    def get_mapper_for_field(
+        self, fieldpath: str
+    ) -> typing.Optional[core.Mapper]:
+        return next((m for m in self.mappers if m.can_map(fieldpath)), None)
 
     def get_document_index_for_field(
         self, fieldpath: str
@@ -437,6 +439,8 @@ class TermQuery(LeafQuery):
 
     def match(self, context: Context) -> typing.Sequence[Hit]:
         mapper = context.get_mapper_for_field(self.fieldpath)
+        if mapper is None:
+            return []
 
         value = mapper.map_value(self.value)
 
@@ -523,6 +527,9 @@ class PrefixQuery(LeafQuery):
 
     def match(self, context: Context) -> typing.Sequence[Hit]:
         mapper = context.get_mapper_for_field(self.fieldpath)
+        if mapper is None:
+            return []
+
         if mapper.type not in ["keyword"]:
             raise QueryShardException(
                 f"Field [{self.fieldpath}] is of unsupported type [{mapper.type}] for [prefix] query"
@@ -630,6 +637,9 @@ class RangeQuery(LeafQuery):
 
     def match(self, context: Context) -> typing.Sequence[Hit]:
         mapper = context.get_mapper_for_field(self.fieldpath)
+        if mapper is None:
+            return []
+
         if mapper.type not in [
             "long",
             "float",
@@ -735,6 +745,9 @@ class GeoshapeQuery(LeafQuery):
 
     def match(self, context: Context) -> typing.Sequence[Hit]:
         mapper = context.get_mapper_for_field(self.fieldpath)
+        if mapper is None:
+            return []
+
         if mapper.type not in ["geo_shape"]:
             raise QueryShardException(
                 f"Field [{self.fieldpath}] is of unsupported type [{mapper.type}] for [geoshape] query"
@@ -831,6 +844,9 @@ class GeodistanceQuery(LeafQuery):
 
     def match(self, context: Context) -> typing.Sequence[Hit]:
         mapper = context.get_mapper_for_field(self.fieldpath)
+        if mapper is None:
+            return []
+
         if mapper.type not in ["geo_point"]:
             raise QueryShardException(
                 f"Field [{self.fieldpath}] is of unsupported type [{mapper.type}] for [geodistance] query"
@@ -972,6 +988,9 @@ class MatchQuery(LeafQuery):
 
     def match(self, context: Context) -> typing.Sequence[Hit]:
         mapper = context.get_mapper_for_field(self.fieldpath)
+        if mapper is None:
+            return []
+
         if mapper.type not in ["text"]:
             raise QueryShardException(
                 f"Field [{self.fieldpath}] is of unsupported type [{mapper.type}] for [match] query"
@@ -1058,6 +1077,9 @@ class MatchBoolPrefixQuery(LeafQuery):
 
     def match(self, context: Context) -> typing.Sequence[Hit]:
         mapper = context.get_mapper_for_field(self.fieldpath)
+        if mapper is None:
+            return []
+
         if mapper.type not in ["text", "search_as_you_type"]:
             raise QueryShardException(
                 f"Field [{self.fieldpath}] is of unsupported type [{mapper.type}] for [match bool prefix] query"

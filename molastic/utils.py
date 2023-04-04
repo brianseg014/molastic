@@ -96,6 +96,7 @@ def transpose_date_format(format: str) -> str:
         "SSSSSS": "%f",
         "SSS": "%f",
         "'T'": "T",
+        "Z": "%z",
     }
 
     for java_format, python_format in mappings.items():
