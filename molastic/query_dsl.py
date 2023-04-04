@@ -381,6 +381,8 @@ class TermQuery(LeafQuery):
         index = context.get_document_index_for_field(self.fieldpath)
         for document in index:
             field = document.get(self.fieldpath)
+            if field is None:
+                continue
 
             for query_value, document_value in itertools.product(
                 value, field.value
@@ -474,6 +476,8 @@ class PrefixQuery(LeafQuery):
         index = context.get_document_index_for_field(self.fieldpath)
         for document in index:
             field = document.get(self.fieldpath)
+            if field is None:
+                continue
 
             for query_value, document_value in itertools.product(
                 value, field.value
@@ -607,6 +611,8 @@ class RangeQuery(LeafQuery):
         index = context.get_document_index_for_field(self.fieldpath)
         for document in index:
             field = document.get(self.fieldpath)
+            if field is None:
+                continue
 
             for document_value in field.value:
                 satisfied = True
@@ -692,6 +698,8 @@ class GeoshapeQuery(LeafQuery):
         index = context.get_document_index_for_field(self.fieldpath)
         for document in index:
             field = document.get(self.fieldpath)
+            if field is None:
+                continue
 
             for query_shape, document_shape in itertools.product(
                 shape, field.value
@@ -793,6 +801,8 @@ class GeodistanceQuery(LeafQuery):
         index = context.get_document_index_for_field(self.fieldpath)
         for document in index:
             field = document.get(self.fieldpath)
+            if field is None:
+                continue
 
             for query_geopoint, document_geopoint in itertools.product(
                 value, field.value
@@ -859,6 +869,8 @@ class _MatchTermQuery(LeafQuery):
         index = context.get_document_index_for_field(self.fieldpath)
         for document in index:
             field = document.get(self.fieldpath)
+            if field is None:
+                continue
 
             for document_value in field.value:
                 assert isinstance(document_value, core.Text)
@@ -890,6 +902,8 @@ class _MatchPrefixQuery(LeafQuery):
         index = context.get_document_index_for_field(self.fieldpath)
         for document in index:
             field = document.get(self.fieldpath)
+            if field is None:
+                continue
 
             for document_value in field.value:
                 assert isinstance(document_value, core.Text)

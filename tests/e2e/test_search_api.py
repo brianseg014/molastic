@@ -734,3 +734,25 @@ def test_search_multifield_search_as_you_type():
     )
     assert response.status_code == 200
     assert response.json()["hits"]["total"]["value"] == 1
+
+
+@mock_elasticsearch("mock://molastic")
+def test_search_with_mapping_but_missing_field_in_document():
+    url = furl.furl("mock://molastic", path="my-index")
+
+    response = requests.put(
+        str(url),
+        json={"mappings": {"properties": {"field": {"type": "keyword"}}}},
+    )
+    assert response.status_code == 200
+
+    doc_url = furl.furl(str(url), path=url.path).add(path="_doc")
+    response = requests.post(str(doc_url), json={"unknown_field": "do_match"})
+    assert response.status_code == 201
+
+    search_url = furl.furl(str(url), path=url.path).add(path="_search")
+    response = requests.get(
+        str(search_url), json={"query": {"term": {"field": "do_match"}}}
+    )
+    assert response.status_code == 200
+    assert response.json()["hits"]["total"]["value"] == 0

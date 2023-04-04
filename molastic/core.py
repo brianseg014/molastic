@@ -515,8 +515,12 @@ class DocumentIndex:
             self._id = _id
             self.fields = fields
 
-        def get(self, fieldpath: str) -> DocumentIndex.FieldIndexed:
-            return next(f for f in self.fields if f.fieldpath == fieldpath)
+        def get(
+            self, fieldpath: str
+        ) -> typing.Optional[DocumentIndex.FieldIndexed]:
+            return next(
+                (f for f in self.fields if f.fieldpath == fieldpath), None
+            )
 
     def __init__(
         self, indexes: typing.Sequence[DocumentIndex.DocumentIndexed]
