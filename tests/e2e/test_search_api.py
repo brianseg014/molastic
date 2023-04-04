@@ -671,3 +671,47 @@ def test_search_multifield():
     )
     assert response.status_code == 200
     assert response.json()["hits"]["total"]["value"] == 1
+
+
+@mock_elasticsearch("mock://molastic")
+def test_search_multifield_search_as_you_type():
+    url = furl.furl("mock://molastic", path="my-index")
+
+    response = requests.put(
+        str(url),
+        json={
+            "mappings": {
+                "properties": {
+                    "field": {
+                        "type": "text",
+                        "fields": {"suggest": {"type": "search_as_you_type"}},
+                    }
+                }
+            }
+        },
+    )
+    assert response.status_code == 200
+
+    doc_url = furl.furl(str(url), path=url.path).add(path="_doc")
+    response = requests.post(str(doc_url), json={"field": "This is a test"})
+    assert response.status_code == 201
+
+    search_url = furl.furl(str(url), path=url.path).add(path="_search")
+    response = requests.get(
+        str(search_url),
+        json={
+            "query": {
+                "multi_match": {
+                    "query": "this i",
+                    "type": "bool_prefix",
+                    "fields": [
+                        "field.suggest",
+                        "field.suggest._2gram",
+                        "field.suggest._3gram",
+                    ],
+                }
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["hits"]["total"]["value"] == 1

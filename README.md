@@ -29,10 +29,10 @@ def test_something():
 
 ## Features
 
-- Types supported: Text, Long, Float, Double, Boolean, Keyword, Date, Geopoint, Geoshape
+- Types supported: Text, SearchAsYouType, Long, Float, Double, Boolean, Keyword, Date, Geopoint, Geoshape
 - Analyzers: Standard
 - Document APIs: Index, Update, Delete, Get
 - Index APIs: Create index, Delete index, Exists, Update mapping, Get Mapping
     - Multi-Fields
-- Queries DSL supported: Boolean, Match, MatchBoolPrefix, MultiMatch, MatchAll, Term, Prefix, Range, Geoshape, Geodistance, 
+- Queries DSL supported: DisjunctionMaxQuery, Boolean, Match, MatchBoolPrefix, MultiMatch, MatchAll, Term, Prefix, Range, Geoshape, Geodistance
 - Scripting: painless (but maps cannot be accessed by dot notation)

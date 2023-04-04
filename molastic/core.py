@@ -265,9 +265,11 @@ class Indice:
             self.update_mappings(mappings)
 
     def update_mappings(self, mappings: typing.Mapping):
-        self.mappings = MappingsMerger.merge(
+        mappings = MappingsMerger.merge(
             mapping1=self.mappings, mapping2=mappings
         )
+        MappingsParser.parse(mappings)
+        self.mappings = mappings
 
     def index(
         self,
@@ -477,6 +479,28 @@ class Indice:
 
 
 class DocumentIndex:
+    """
+    General index purpose. Consists of a flatten document version of
+    fieldpath,[value] paisrs.
+
+    For example:
+        Document:
+            source:
+                {
+                    "field1": "value",
+                    "field2: {
+                        "field3": "value"
+                    }
+                }
+
+        Index:
+            {
+                "field1": [Keyword("value")],
+                "field2.field3": [Keyword("value")]
+            }
+
+    """
+
     class FieldIndexed:
         def __init__(
             self, fieldpath: str, value: typing.Sequence[Value]
@@ -511,7 +535,6 @@ class DocumentIndex:
     def create(
         cls, documents: typing.Sequence[Document], mappings: typing.Mapping
     ) -> DocumentIndex:
-        # Rebuild indexes
         mappers = MappingsParser.parse(mappings)
 
         indexes: typing.List[DocumentIndex.DocumentIndexed] = []
@@ -553,6 +576,9 @@ class Mapper(abc.ABC):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(sourcepath='{self.sourcepath}', targetpath='{self.targetpath}')"
 
+    def can_map(self, fieldpath: str) -> bool:
+        return self.targetpath == fieldpath
+
     @abc.abstractmethod
     def map_document(
         self, document: Document
@@ -562,11 +588,6 @@ class Mapper(abc.ABC):
     @abc.abstractmethod
     def map_value(self, body) -> typing.Iterable[Value]:
         pass
-
-    # @abc.abstractmethod
-    # def map(self, body) -> typing.Iterable[Value]:
-    #     "Create runtime value given a source body"
-    #     pass
 
 
 class KeywordMapper(Mapper):
@@ -580,23 +601,6 @@ class KeywordMapper(Mapper):
     ) -> None:
         super().__init__(sourcepath, targetpath, type, fields)
         self.ignore_above = ignore_above
-
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        mergers: typing.List[typing.Callable[[], None]] = []
-        for paramname in fieldmapping:
-            if paramname == "ignore_above":
-                mergers.append(
-                    lambda: setattr(
-                        self, "ignore_above", fieldmapping[")ignore_above"]
-                    )
-                )
-            else:
-                raise MapperParsingException(
-                    f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
-                )
-        return mergers
 
     def map_document(
         self, document: Document
@@ -621,15 +625,6 @@ class BooleanMapper(Mapper):
     ) -> None:
         super().__init__(sourcepath, targetpath, type, fields)
 
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        for paramname in fieldmapping:
-            raise MapperParsingException(
-                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
-            )
-        return []
-
     def map_document(
         self, document: Document
     ) -> typing.Dict[str, typing.Iterable[Value]]:
@@ -652,15 +647,6 @@ class FloatMapper(Mapper):
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
         super().__init__(sourcepath, targetpath, type, fields)
-
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        for paramname in fieldmapping:
-            raise MapperParsingException(
-                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
-            )
-        return []
 
     def map_document(
         self, document: Document
@@ -685,15 +671,6 @@ class DoubleMapper(Mapper):
     ) -> None:
         super().__init__(sourcepath, targetpath, type, fields)
 
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        for paramname in fieldmapping:
-            raise MapperParsingException(
-                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
-            )
-        return []
-
     def map_document(
         self, document: Document
     ) -> typing.Dict[str, typing.Iterable[Value]]:
@@ -716,15 +693,6 @@ class LongMapper(Mapper):
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
         super().__init__(sourcepath, targetpath, type, fields)
-
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        for paramname in fieldmapping:
-            raise MapperParsingException(
-                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
-            )
-        return []
 
     def map_document(
         self, document: Document
@@ -753,21 +721,6 @@ class DateMapper(Mapper):
 
     def __repr__(self):
         return f"DateMapper(format={repr(self.format)})"
-
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        mergers: typing.List[typing.Callable[[], None]] = []
-        for paramname in fieldmapping:
-            if paramname == "format":
-                mergers.append(
-                    lambda: setattr(self, "format", fieldmapping["format"])
-                )
-            else:
-                raise MapperParsingException(
-                    f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
-                )
-        return mergers
 
     def map_document(
         self, document: Document
@@ -810,24 +763,6 @@ class TextMapper(Mapper):
         else:
             raise NotImplementedError(f"analyzer: {analyzer}")
 
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        mergers: typing.List[typing.Callable[[], None]] = []
-        for paramname in fieldmapping:
-            if paramname == "analyzer":
-                mergers.append(
-                    lambda: (
-                        setattr(self, "analyzer", fieldmapping["analyzer"])
-                    )
-                )
-            else:
-                raise MapperParsingException(
-                    f"unknown parameter [{paramname}] on mapper "
-                    f"[{self.fieldname}] of type [{self.type}]"
-                )
-        return mergers
-
     def map_document(
         self, document: Document
     ) -> typing.Dict[str, typing.Iterable[Value]]:
@@ -836,6 +771,60 @@ class TextMapper(Mapper):
             return {}
 
         return {self.targetpath: self.map_value(body)}
+
+    def map_value(self, body) -> typing.Iterable[Value]:
+        return Text.parse(body, self.default_analyzer)
+
+
+class SearchAsYouTypeMapper(Mapper):
+    default_analyzer = analysis.StandardAnalyzer()
+
+    def __init__(
+        self,
+        sourcepath: str,
+        targetpath: str,
+        type: str,
+        analyzer: str = "standard",
+        fields: typing.Optional[typing.Mapping] = None,
+    ) -> None:
+        super().__init__(sourcepath, targetpath, type, fields)
+        self.analyzer = analyzer
+
+    @property
+    def analyzer(self) -> analysis.Analyzer:
+        return self._analyzer
+
+    @analyzer.setter
+    def analyzer(self, analyzer: str):
+        self._analyzer = self.create_analyzer(analyzer)
+
+    def create_analyzer(self, analyzer: str) -> analysis.Analyzer:
+        if analyzer == "standard":
+            return self.default_analyzer
+        else:
+            raise NotImplementedError(f"analyzer: {analyzer}")
+
+    def can_map(self, fieldpath: str) -> bool:
+        return fieldpath in [
+            self.targetpath,
+            self.targetpath + "._2gram",
+            self.targetpath + "._3gram",
+            self.targetpath + "._index_prefix",
+        ]
+
+    def map_document(
+        self, document: Document
+    ) -> typing.Dict[str, typing.Iterable[Value]]:
+        body = read_from_document(self.sourcepath, document, None)
+        if body is None:
+            return {}
+
+        return {
+            self.targetpath: self.map_value(body),
+            self.targetpath + "._2gram": self.map_value(body),
+            self.targetpath + "._3gram": self.map_value(body),
+            self.targetpath + "._index_prefix": self.map_value(body),
+        }
 
     def map_value(self, body) -> typing.Iterable[Value]:
         return Text.parse(body, self.default_analyzer)
@@ -850,15 +839,6 @@ class GeopointMapper(Mapper):
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
         super().__init__(sourcepath, targetpath, type, fields)
-
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        for paramname in fieldmapping:
-            raise MapperParsingException(
-                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
-            )
-        return []
 
     def map_document(
         self, document: Document
@@ -882,15 +862,6 @@ class GeoshapeMapper(Mapper):
         fields: typing.Optional[typing.Mapping] = None,
     ) -> None:
         super().__init__(sourcepath, targetpath, type, fields)
-
-    def merge(
-        self, fieldmapping: typing.Mapping
-    ) -> typing.Iterable[typing.Callable[[], None]]:
-        for paramname in fieldmapping:
-            raise MapperParsingException(
-                f"unknown parameter [{paramname}] on mapper [{self.fieldname}] of type [{self.type}]"
-            )
-        return []
 
     def map_document(
         self, document: Document
@@ -1105,6 +1076,7 @@ class MappingsParser:
         "double": DoubleMapper,
         "date": DateMapper,
         "text": TextMapper,
+        "search_as_you_type": SearchAsYouTypeMapper,
         "geo_point": GeopointMapper,
         "geo_shape": GeoshapeMapper,
     }

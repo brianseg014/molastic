@@ -129,7 +129,7 @@ class Context:
         return iter(self.indice.documents)
 
     def get_mapper_for_field(self, fieldpath: str) -> core.Mapper:
-        return next(m for m in self.mappers if m.targetpath == fieldpath)
+        return next(m for m in self.mappers if m.can_map(fieldpath))
 
     def get_document_index_for_field(
         self, fieldpath: str
@@ -1058,7 +1058,7 @@ class MatchBoolPrefixQuery(LeafQuery):
 
     def match(self, context: Context) -> typing.Sequence[Hit]:
         mapper = context.get_mapper_for_field(self.fieldpath)
-        if mapper.type not in ["text"]:
+        if mapper.type not in ["text", "search_as_you_type"]:
             raise QueryShardException(
                 f"Field [{self.fieldpath}] is of unsupported type [{mapper.type}] for [match bool prefix] query"
             )
