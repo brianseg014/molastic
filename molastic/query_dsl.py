@@ -674,7 +674,7 @@ class GeoshapeQuery(LeafQuery):
         self,
         fieldpath: str,
         shape: typing.Mapping,
-        relation: Relation = Relation.INTERSECTS,
+        relation: str = "INTERSECTS",
     ) -> None:
         super().__init__()
         self.fieldpath = fieldpath
@@ -701,15 +701,17 @@ class GeoshapeQuery(LeafQuery):
             if field is None:
                 continue
 
+            relation = GeoshapeQuery.Relation[self.relation]
+
             for query_shape, document_shape in itertools.product(
                 shape, field.value
             ):
                 assert isinstance(query_shape, core.Geoshape)
                 assert isinstance(document_shape, core.Geoshape)
 
-                if self.relation == GeoshapeQuery.Relation.INTERSECTS:
+                if relation == GeoshapeQuery.Relation.INTERSECTS:
                     satisfied = document_shape.intersects(query_shape)
-                elif self.relation == GeoshapeQuery.Relation.CONTAINS:
+                elif relation == GeoshapeQuery.Relation.CONTAINS:
                     satisfied = document_shape.contains(query_shape)
                 else:
                     raise NotImplementedError(
