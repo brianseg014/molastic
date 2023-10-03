@@ -1446,19 +1446,45 @@ class Date(Value):
     def __eq__(self, __o) -> bool:
         if not isinstance(__o, Date):
             return False
-        return self.datetime == __o.datetime
+
+        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
+            return self.datetime.replace(tzinfo=None) == __o.datetime.replace(
+                tzinfo=None
+            )
+        else:
+            return self.datetime == __o.datetime
 
     def __ge__(self, __o: Date) -> bool:
-        return self.datetime >= __o.datetime
+        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
+            return self.datetime.replace(tzinfo=None) >= __o.datetime.replace(
+                tzinfo=None
+            )
+        else:
+            return self.datetime >= __o.datetime
 
     def __gt__(self, __o: Date) -> bool:
-        return self.datetime > __o.datetime
+        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
+            return self.datetime.replace(tzinfo=None) > __o.datetime.replace(
+                tzinfo=None
+            )
+        else:
+            return self.datetime > __o.datetime
 
     def __le__(self, __o: Date) -> bool:
-        return self.datetime <= __o.datetime
+        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
+            return self.datetime.replace(tzinfo=None) <= __o.datetime.replace(
+                tzinfo=None
+            )
+        else:
+            return self.datetime <= __o.datetime
 
     def __lt__(self, __o: Date) -> bool:
-        return self.datetime < __o.datetime
+        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
+            return self.datetime.replace(tzinfo=None) < __o.datetime.replace(
+                tzinfo=None
+            )
+        else:
+            return self.datetime < __o.datetime
 
     @classmethod
     def parse_date_format(cls, format: str) -> typing.Sequence[str]:
