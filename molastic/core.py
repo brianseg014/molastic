@@ -1600,8 +1600,10 @@ class Date(Value):
                 else:
                     return Date(
                         int(
-                            datetime.datetime.strptime(
-                                str(body), utils.transpose_date_format(f)
+                            datetime.datetime.utcfromtimestamp(
+                                datetime.datetime.strptime(
+                                    str(body), utils.transpose_date_format(f)
+                                ).timestamp()
                             ).timestamp()
                             * 1000
                         )
@@ -1623,11 +1625,9 @@ class Date(Value):
         match_anchor = Date.ANCHOR_PATTERN.match(body)
         if match_anchor is not None:
             dt = datetime.datetime.fromtimestamp(
-                list(
-                    cls.parse(
-                        match_anchor.group("anchor"), format="yyyy.MM.dd"
-                    )
-                )[0].epoch
+                cls.parse_single(
+                    match_anchor.group("anchor"), format="yyyy.MM.dd"
+                ).epoch
                 / 1000
             )
 
