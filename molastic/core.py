@@ -1420,71 +1420,30 @@ class Date(Value):
         r"^(?P<anchor>.+)\|\|((?P<delta_measure>[-+]\d+)(?P<delta_unit>[yMwdhHms]))?(/(?P<round_unit>[yMwdhHms]))?$"
     )
 
-    def __init__(
-        self, value: typing.Union[str, int, float], format: str
-    ) -> None:
-        super().__init__(value)
-        self.format = format
-
-        if format == "epoch_millis":
-            self.datetime = datetime.datetime.utcfromtimestamp(
-                float(value) / 1000
-            )
-        elif format == "epoch_second":
-            self.datetime = datetime.datetime.utcfromtimestamp(float(value))
-        else:
-            self.datetime = datetime.datetime.strptime(
-                str(value), utils.transpose_date_format(format)
-            )
+    def __init__(self, epoch: int) -> None:
+        # milliseconds-since-the-epoch in UTC
+        self.epoch = epoch
 
     def __repr__(self):
-        if self.format in ["epoch_millis", "epoch_second"]:
-            return f"Date({self.value}, '{self.format}')"
-        else:
-            return f"Date('{self.value}', '{self.format}')"
+        return f"Date({self.epoch})"
 
     def __eq__(self, __o) -> bool:
         if not isinstance(__o, Date):
             return False
 
-        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
-            return self.datetime.replace(tzinfo=None) == __o.datetime.replace(
-                tzinfo=None
-            )
-        else:
-            return self.datetime == __o.datetime
+        return self.epoch == __o.epoch
 
     def __ge__(self, __o: Date) -> bool:
-        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
-            return self.datetime.replace(tzinfo=None) >= __o.datetime.replace(
-                tzinfo=None
-            )
-        else:
-            return self.datetime >= __o.datetime
+        return self.epoch >= __o.epoch
 
     def __gt__(self, __o: Date) -> bool:
-        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
-            return self.datetime.replace(tzinfo=None) > __o.datetime.replace(
-                tzinfo=None
-            )
-        else:
-            return self.datetime > __o.datetime
+        return self.epoch > __o.epoch
 
     def __le__(self, __o: Date) -> bool:
-        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
-            return self.datetime.replace(tzinfo=None) <= __o.datetime.replace(
-                tzinfo=None
-            )
-        else:
-            return self.datetime <= __o.datetime
+        return self.epoch <= __o.epoch
 
     def __lt__(self, __o: Date) -> bool:
-        if self.datetime.tzinfo is None or __o.datetime.tzinfo is None:
-            return self.datetime.replace(tzinfo=None) < __o.datetime.replace(
-                tzinfo=None
-            )
-        else:
-            return self.datetime < __o.datetime
+        return self.epoch < __o.epoch
 
     @classmethod
     def parse_date_format(cls, format: str) -> typing.Sequence[str]:
@@ -1634,7 +1593,19 @@ class Date(Value):
     ) -> Date:
         for f in cls.parse_date_format(format):
             if cls.match_date_format(body, f):
-                return Date(body, f)
+                if f == "epoch_millis":
+                    return Date(int(body))
+                elif f == "epoch_second":
+                    return Date(int(body * 1000))
+                else:
+                    return Date(
+                        int(
+                            datetime.datetime.strptime(
+                                str(body), utils.transpose_date_format(f)
+                            ).timestamp()
+                            * 1000
+                        )
+                    )
 
         raise DateTimeParseException(
             f"Text '{body}' could not be parsed with formats [{format}]"
@@ -1651,9 +1622,14 @@ class Date(Value):
     def parse_date_math(cls, body: str) -> Date:
         match_anchor = Date.ANCHOR_PATTERN.match(body)
         if match_anchor is not None:
-            dt = list(
-                cls.parse(match_anchor.group("anchor"), format="yyyy.MM.dd")
-            )[0].datetime
+            dt = datetime.datetime.fromtimestamp(
+                list(
+                    cls.parse(
+                        match_anchor.group("anchor"), format="yyyy.MM.dd"
+                    )
+                )[0].epoch
+                / 1000
+            )
 
             delta_measure = match_anchor.group("delta_measure")
             delta_unit = match_anchor.group("delta_unit")
@@ -1663,7 +1639,7 @@ class Date(Value):
             round_unit = match_anchor.group("round_unit")
             if round_unit is not None:
                 dt = cls.round(dt, round_unit)
-            return Date(dt.timestamp(), "epoch_millis")
+            return Date(int(dt.timestamp() * 1000))
 
         match_now = Date.NOW_PATTERN.match(body)
         if match_now is not None:
@@ -1677,7 +1653,7 @@ class Date(Value):
             round_unit = match_now.group("round_unit")
             if round_unit is not None:
                 dt = cls.round(dt, round_unit)
-            return Date(dt.timestamp(), "epoch_second")
+            return Date(int(dt.timestamp() * 1000))
 
         raise ElasticError("bad match now and anchor")
 
