@@ -411,7 +411,7 @@ class Indice:
 
             scripting = Scripting.parse(body["script"])
 
-            ctx = scripting.dumps({"_source": _source})
+            ctx = typing.cast(dict, scripting.dumps({"_source": _source}))
 
             scripting.execute({"ctx": ctx})
 
@@ -419,6 +419,9 @@ class Indice:
 
         elif "doc" in body:
             _source = utils.source_merger.merge(_doc_base_copy, body["doc"])
+        
+        else:
+            raise TypeError('Either script or doc is required')
 
         _document = Document(
             _index=self,
@@ -912,6 +915,7 @@ class DynamicMapping:
                 continue
 
             fragment = utils.get_from_mapping(segments[:-1], mappings)
+            assert fragment is not None
             fragment[segments[-1]] = mapping_v
 
         return mappings
@@ -927,6 +931,7 @@ class DynamicMapping:
             return None
 
         while utils.is_array(value):
+            value = typing.cast(typing.Sequence, value)
             if len(value) == 0:
                 value = None
             else:
@@ -1044,6 +1049,7 @@ class MappingsMerger:
                 )
 
             fragment = utils.get_from_mapping(segments[:-1], mappings)
+            assert fragment is not None
             fragment[segments[-1]] = mapping_v
 
         return mappings
@@ -1809,7 +1815,7 @@ class Geodistance(Value):
         raise ParsingException("geo_distance expected")
 
     @classmethod
-    def parse_string(self, body: str) -> Geodistance:
+    def parse_string(cls, body: str) -> Geodistance:
         match = Geodistance.DISTANCE_PATTERN.match(body)
 
         if match is None:
@@ -1906,8 +1912,8 @@ class Geopoint(Value):
         # Try lat,lon
         match = lat_lon_pattern.match(body)
         if match is not None:
-            lat = match.group("lat")
-            lon = match.group("lon")
+            lat = float(match.group("lat"))
+            lon = float(match.group("lon"))
             point = shapely.geometry.Point(lon, lat)
             return Geopoint(body, point)
 
@@ -1942,7 +1948,7 @@ class Geoshape(Value):
     def __init__(
         self,
         value: typing.Union[str, dict],
-        shape: typing.Union[shapely.geometry.Point, shapely.geometry.Polygon],
+        shape: typing.Union[shapely.geometry.Point, shapely.geometry.Polygon, shapely.geometry.MultiPolygon],
     ) -> None:
         super().__init__(value)
         self.shape = shape
@@ -1958,6 +1964,8 @@ class Geoshape(Value):
             return f"Geoshape('Point', {self.shape.x}, {self.shape.y})"
         elif isinstance(self.shape, shapely.geometry.Polygon):
             return f"Geoshape('Polygon', {list(self.shape.exterior.coords)})"
+        elif isinstance(self.shape, shapely.geometry.MultiPolygon):
+            return f"Geoshape('MultiPolygon', ...)"
 
     @classmethod
     def parse(cls, body) -> typing.Iterable[Geoshape]:
@@ -1974,7 +1982,7 @@ class Geoshape(Value):
 
     @classmethod
     def parse_string(cls, body: str) -> Geoshape:
-        return Geoshape(body, shapely.wkt.loads(body))
+        return Geoshape(body, typing.cast(shapely.MultiPolygon, shapely.wkt.loads(body)))
 
     @classmethod
     def parse_object(cls, body: dict) -> Geoshape:
@@ -1996,7 +2004,7 @@ class Geoshape(Value):
                 body,
                 shapely.geometry.MultiPolygon(
                     polygons=[
-                        [polygon[0], polygon[1:]]  # polygon  # holes
+                        (polygon[0], polygon[1:])  # polygon  # holes
                         for polygon in coords
                     ]
                 ),

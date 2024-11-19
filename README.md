@@ -31,7 +31,7 @@ def test_something():
 
 - Types supported: Text, SearchAsYouType, Long, Float, Double, Boolean, Keyword, Date, Geopoint, Geoshape
 - Analyzers: Standard
-- Document APIs: Index, Update, Delete, Get
+- Document APIs: Index, Update, Delete, Get, Exists
 - Index APIs: Create index, Delete index, Exists, Update mapping, Get Mapping
     - Multi-Fields
 - Queries DSL supported: DisjunctionMaxQuery, Boolean, Match, MatchBoolPrefix, MultiMatch, MatchAll, Term, Prefix, Range, Geoshape, Geodistance

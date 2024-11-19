@@ -240,3 +240,30 @@ class GetDocumentHandler(RequestHandler):
                     "_source": document["_source"],
                 }
             )
+
+
+class ExistsDocumentHandler(RequestHandler):
+    def __init__(self, engine: core.ElasticEngine) -> None:
+        self.engine = engine
+
+    def can_handle(self, request: requests.PreparedRequest) -> bool:
+        url = furl.furl(request.url)
+
+        return (
+            request.method == "HEAD"
+            and len(url.path.segments) == 3
+            and url.path.segments[1] == "_doc"
+        )
+    
+    def handle(self, request: requests.PreparedRequest, context) -> str | None:
+        url = furl.furl(request.url)
+
+        target = core.IndiceName.parse(url.path.segments[0])
+        id = url.path.segments[2]
+
+        indice = self.engine.indice(target, autocreate=True)
+
+        if indice.exists(id):
+            context.status_code = 200
+        else:
+            context.status_code = 404
