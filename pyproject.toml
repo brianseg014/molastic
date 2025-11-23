@@ -1,12 +1,12 @@
 [project]
 name = "molastic"
-version = "0.2.4"
+version = "1.0.0"
 authors = [
     { name="Brian Estrada", email="brianseg014@gmail.com" }
 ]
 description = "Library to easymock out elasticsearch for your tests"
 readme = "README.md"
-requires-python = ">3.9"
+requires-python = ">=3.12"
 dependencies=[
     'python-dateutil==2.8.2',
     'requests-mock==1.9.3',
@@ -16,7 +16,7 @@ dependencies=[
     'deepmerge==1.0.1',
     'furl==2.1.3',
     'ply==3.11',
-    'pyjnius==1.6.1'
+    'pyjnius==1.7.0'
 ]
 
 [project.optional-dependencies]
